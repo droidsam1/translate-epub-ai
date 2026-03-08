@@ -25,7 +25,7 @@ def build_translation_prompt(
 ) -> str:
     if target_lang.lower() == "es":
         locale_instruction = "natural European Spanish (Spanish as used in Spain)"
-        quote_instruction = 'Use proper Spanish book-style quotation marks ("« »") when appropriate.'
+        quote_instruction = 'Use proper Spanish book-style quotation marks ("\u00ab \u00bb") when appropriate.'
     else:
         locale_instruction = target_lang
         quote_instruction = ""
@@ -80,8 +80,8 @@ def build_translation_prompt(
                 if current:
                     prompt += f"- Item {index}: {json.dumps(current, ensure_ascii=False)}\n"
         if context_hints:
-            context_lines = [hint for hint in context_hints if hint]
-            if context_lines:
+            visible_hints = [hint for hint in context_hints if hint]
+            if visible_hints:
                 prompt += "\nOptional context hints:\n"
                 for index, hint in enumerate(context_hints, start=1):
                     if hint:

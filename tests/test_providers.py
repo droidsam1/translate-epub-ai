@@ -5,13 +5,8 @@ from pathlib import Path
 
 from translate_epub_ai.batch_providers import AnthropicBatchProvider
 from translate_epub_ai.cache import ProgressCache
-from translate_epub_ai.cli import (
-    build_config,
-    load_repair_items,
-    parse_args,
-    required_api_key_env,
-    should_auto_repair,
-)
+from translate_epub_ai.cli import build_config, parse_args
+from translate_epub_ai.workflow import load_repair_items, required_api_key_env, should_auto_repair
 
 
 class ProviderTests(unittest.TestCase):
@@ -46,12 +41,7 @@ class ProviderTests(unittest.TestCase):
                 "result": {
                     "type": "succeeded",
                     "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": '["Hola mundo"]',
-                            }
-                        ]
+                        "content": [{"type": "text", "text": '["Hola mundo"]'}]
                     },
                 },
             }
@@ -79,7 +69,7 @@ class ProviderTests(unittest.TestCase):
         self.assertTrue(
             should_auto_repair(
                 "A thoughtful sentence about knowledge and explanation.",
-                'Una frase extraña con "Â« comillas Â»" rotas.',
+                'Una frase extrana con "\u00c2\u00ab comillas \u00c2\u00bb" rotas.',
                 "es",
             )
         )
@@ -97,7 +87,7 @@ class ProviderTests(unittest.TestCase):
         self.assertFalse(
             should_auto_repair(
                 "This theory explains the structure of reality in a precise way.",
-                "Esta teoría explica la estructura de la realidad de una manera precisa.",
+                "Esta teoria explica la estructura de la realidad de una manera precisa.",
                 "es",
             )
         )

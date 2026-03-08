@@ -1,28 +1,49 @@
 # translate-epub-ai
 
-Simple tool to translate EPUB books with OpenAI while keeping the EPUB structure intact.
+Translate EPUB books with OpenAI in a simple, copy-paste friendly way.
 
-Spanish version: [README.es.md](/C:/Users/Sam/OneDrive/Documentos/dev/translate_script/README.es.md)
+[Leer en español](README.es.md)
 
-## What this does
+![How it works](docs/assets/how-it-works.svg)
 
-You give the tool an `.epub` file.
+## The shortest version
 
-The tool:
+If you only want the fast path:
 
-- extracts the book
-- finds the readable text
-- sends translation jobs through the OpenAI Batch API
-- keeps the original EPUB structure
-- builds a translated `.epub` file
-- saves progress in a cache so you can resume work
+1. Install the project.
+2. Set `OPENAI_API_KEY`.
+3. Run one command.
+
+```bash
+pip install -e .
+python translate_epub_batch_v3.py "book.epub" --to es
+```
+
+Output:
+
+```text
+book_ES.epub
+```
+
+## What this tool does
+
+You give it an EPUB file.
+
+It will:
+
+- open the EPUB safely
+- find the human-readable text
+- send translation jobs through the OpenAI Batch API
+- keep the original EPUB structure
+- generate a translated EPUB
+- save progress so you can resume later
 
 ## What you need
 
 - Python 3.10 or newer
 - an OpenAI API key
 
-## 1. Install
+## Install
 
 Open a terminal in the project folder and run:
 
@@ -30,7 +51,7 @@ Open a terminal in the project folder and run:
 pip install -e .
 ```
 
-## 2. Set your OpenAI API key
+## Set your OpenAI API key
 
 PowerShell:
 
@@ -44,57 +65,60 @@ Command Prompt (`cmd`):
 set OPENAI_API_KEY=your_api_key_here
 ```
 
-## 3. Translate a book
+macOS / Linux:
 
-Example:
+```bash
+export OPENAI_API_KEY="your_api_key_here"
+```
+
+## Translate your first book
+
+Basic example:
 
 ```bash
 python translate_epub_batch_v3.py "book.epub" --to es
 ```
 
-This will create a translated file like:
-
-```text
-book_ES.epub
-```
-
-## Most useful commands
-
-Create the batch files only, without sending anything yet:
-
-```bash
-python translate_epub_batch_v3.py "book.epub" --to es --prepare-only
-```
-
-Use a different model:
+Example with a real model:
 
 ```bash
 python translate_epub_batch_v3.py "book.epub" --to es --model gpt-4.1-mini
 ```
 
-Resume an existing batch:
+## Useful commands
+
+Prepare everything but do not send the batch yet:
+
+```bash
+python translate_epub_batch_v3.py "book.epub" --to es --prepare-only
+```
+
+Resume a batch you already created:
 
 ```bash
 python translate_epub_batch_v3.py "book.epub" --resume-batch-id batch_123
 ```
 
-Use your own translation prompt:
+Use a custom prompt file:
 
 ```bash
 python translate_epub_batch_v3.py "book.epub" --to es --prompt-file my_prompt.txt
 ```
 
-## Change the prompt
+## Want better translation style?
 
-Default prompt file:
+The default prompt lives here:
 
 ```text
 src/translate_epub_ai/prompts/default_prompt.txt
 ```
 
-If you want to change translation style, tone, or wording, edit that file or pass your own file with `--prompt-file`.
+You can:
 
-You do not need to change Python code just to tune the prompt.
+- edit that file directly
+- pass your own file with `--prompt-file`
+
+This means you can improve tone, style, and fluency without changing Python code.
 
 ## Run tests
 
@@ -102,7 +126,7 @@ You do not need to change Python code just to tune the prompt.
 python -m unittest discover -s tests -v
 ```
 
-## Project structure
+## Project layout
 
 ```text
 src/translate_epub_ai/cli.py
@@ -112,18 +136,34 @@ src/translate_epub_ai/prompting.py
 tests/
 ```
 
-## In plain words
+## What each file does
 
-- `cli.py`: runs the tool
-- `epub.py`: opens and rebuilds EPUB files
-- `openai_batch.py`: talks to OpenAI Batch API
-- `prompting.py`: builds the translation prompt
-- `tests/`: basic checks so changes are safer
+- `cli.py`: command-line entry point
+- `epub.py`: extract and rebuild EPUB files
+- `openai_batch.py`: build batch requests and read batch results
+- `prompting.py`: generate the translation prompt
+- `tests/`: keep refactors safer
 
-## Current tests
+## Included tests
 
-The repository includes tests for:
+This repo currently checks:
 
 - prompt generation
 - batch grouping logic
-- prompt quality checks using a difficult passage from *The Beginning of Infinity*
+- prompt quality using a difficult passage from *The Beginning of Infinity*
+
+## Troubleshooting
+
+If you see `OPENAI_API_KEY is not set`, set the environment variable first.
+
+If you want to inspect the generated batch files before sending them, use:
+
+```bash
+python translate_epub_batch_v3.py "book.epub" --to es --prepare-only
+```
+
+If you want to change the translation style, start by editing:
+
+```text
+src/translate_epub_ai/prompts/default_prompt.txt
+```

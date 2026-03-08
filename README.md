@@ -16,7 +16,7 @@ If you only want the fast path:
 
 ```bash
 pip install -e .
-python translate_epub_batch_v3.py "book.epub" --to es
+python -m translate_epub_ai "book.epub" --to es
 ```
 
 Output:
@@ -94,19 +94,19 @@ export ANTHROPIC_API_KEY="your_api_key_here"
 Basic example:
 
 ```bash
-python translate_epub_batch_v3.py "book.epub" --to es
+python -m translate_epub_ai "book.epub" --to es
 ```
 
 Example with a real model:
 
 ```bash
-python translate_epub_batch_v3.py "book.epub" --to es --model gpt-4.1-mini
+python -m translate_epub_ai "book.epub" --to es --model gpt-4.1-mini
 ```
 
 Anthropic example:
 
 ```bash
-python translate_epub_batch_v3.py "book.epub" --provider anthropic --model claude-sonnet-4-20250514 --to es
+python -m translate_epub_ai "book.epub" --provider anthropic --model claude-sonnet-4-20250514 --to es
 ```
 
 ## Useful commands
@@ -114,25 +114,26 @@ python translate_epub_batch_v3.py "book.epub" --provider anthropic --model claud
 Prepare everything but do not send the batch yet:
 
 ```bash
-python translate_epub_batch_v3.py "book.epub" --to es --prepare-only
+python -m translate_epub_ai "book.epub" --to es --prepare-only
 ```
 
 Resume a batch you already created:
 
 ```bash
-python translate_epub_batch_v3.py "book.epub" --resume-batch-id batch_123
+python -m translate_epub_ai "book.epub" --resume-batch-id batch_123
 ```
 
 Important:
 
 - if you do not set `--provider`, it still uses `openai`
-- this keeps backward compatibility with the old usage
+- `python -m translate_epub_ai` is the recommended command now
+- `python translate_epub_batch_v3.py` is still available as a legacy compatibility wrapper
 - cache and resume still work so translated segments are not requested again
 
 Use a custom prompt file:
 
 ```bash
-python translate_epub_batch_v3.py "book.epub" --to es --prompt-file my_prompt.txt
+python -m translate_epub_ai "book.epub" --to es --prompt-file my_prompt.txt
 ```
 
 Automatic repair is enabled by default:
@@ -148,7 +149,7 @@ So in normal use, you do not need to manually review the whole book just to trig
 Repair only specific bad phrases or paragraphs:
 
 ```bash
-python translate_epub_batch_v3.py "book.epub" --to es --repair-file repair.json
+python -m translate_epub_ai "book.epub" --to es --repair-file repair.json
 ```
 
 Example `repair.json`:
@@ -185,7 +186,7 @@ If some translated lines still look broken, awkward, or unnatural, the tool now 
 You can also control the built-in review stage:
 
 ```bash
-python translate_epub_batch_v3.py "book.epub" --to es --review-passes 1
+python -m translate_epub_ai "book.epub" --to es --review-passes 1
 ```
 
 ## Run tests
@@ -233,7 +234,7 @@ If you are using Anthropic, set `ANTHROPIC_API_KEY` instead and add:
 If you want to inspect the generated batch files before sending them, use:
 
 ```bash
-python translate_epub_batch_v3.py "book.epub" --to es --prepare-only
+python -m translate_epub_ai "book.epub" --to es --prepare-only
 ```
 
 If you want to change the translation style, start by editing:

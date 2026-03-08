@@ -15,6 +15,8 @@ class PromptingTests(unittest.TestCase):
         self.assertIn("Spanish as used in Spain", prompt)
         self.assertIn('["Hello", "World"]', prompt)
         self.assertIn("exactly 2 translated strings", prompt)
+        self.assertIn("Preserve the author's voice and register", prompt)
+        self.assertIn("prioritize precision, clarity, and terminological consistency", prompt)
 
 
 if __name__ == "__main__":

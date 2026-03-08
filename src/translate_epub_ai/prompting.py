@@ -21,15 +21,15 @@ def build_translation_prompt(
 ) -> str:
     if target_lang.lower() == "es":
         locale_instruction = "natural European Spanish (Spanish as used in Spain)"
-        quote_instruction = "Use proper Spanish book-style quotation marks (« ») when appropriate."
+        quote_instruction = 'Use proper Spanish book-style quotation marks ("« »") when appropriate.'
     else:
         locale_instruction = target_lang
         quote_instruction = ""
 
     style_instruction = (
-        "The translation must read like a professionally published book."
+        "The translation must read like a professionally published book, with natural rhythm, strong readability, and faithful preservation of the author's voice."
         if natural
-        else "The translation should remain faithful and clear, while still sounding natural."
+        else "The translation should remain precise and faithful, but still read as fluent, idiomatic prose in the target language."
     )
 
     template = load_prompt_template(prompt_file)

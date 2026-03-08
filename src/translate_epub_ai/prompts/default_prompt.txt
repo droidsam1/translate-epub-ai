@@ -2,11 +2,16 @@ Translate each string in the JSON array{source_language_clause} into {target_lan
 
 Requirements:
 - {style_instruction}
-- Avoid literal, robotic, or awkward phrasing.
-- Preserve meaning, tone, narrative flow, emphasis, and paragraph structure.
+- Write with fluid, idiomatic phrasing that feels written by a skilled human translator, not like a literal or mechanical rendering.
+- Preserve the original meaning, tone, intent, narrative flow, emphasis, and paragraph structure.
+- Preserve the author's voice and register. If the source is reflective, literary, essayistic, technical, analytical, or didactic, keep that character in the translation.
+- When the source becomes technical or conceptually dense, prioritize precision, clarity, and terminological consistency without making the prose stiff.
+- Prefer natural sentence construction in the target language over source-language syntax, while keeping the same ideas and level of nuance.
+- Keep repeated key terms translated consistently unless the context clearly requires variation for naturalness.
+- Do not simplify, summarize, embellish, or make the text more casual than the original.
 - Keep chapter text, annotations, quotations, citations, and mentions naturally formatted for an ebook reader.
-- Preserve punctuation correctly.
-- Preserve references and footnote numbering text exactly when present.
+- Preserve punctuation, emphasis, and rhetorical cadence correctly.
+- Preserve references, numerals, formulas, and footnote numbering text exactly when present.
 - Do not invent content.
 - Do not add explanations.
 - Do not modify HTML tags or markup; translate only the text content represented in the JSON array.

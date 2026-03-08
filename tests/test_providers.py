@@ -6,7 +6,12 @@ from pathlib import Path
 from translate_epub_ai.batch_providers import AnthropicBatchProvider
 from translate_epub_ai.cache import ProgressCache
 from translate_epub_ai.cli import build_config, parse_args
-from translate_epub_ai.workflow import load_repair_items, required_api_key_env, should_auto_repair
+from translate_epub_ai.workflow import (
+    cleanup_artifacts,
+    load_repair_items,
+    required_api_key_env,
+    should_auto_repair,
+)
 
 
 class ProviderTests(unittest.TestCase):
@@ -91,6 +96,22 @@ class ProviderTests(unittest.TestCase):
                 "es",
             )
         )
+
+    def test_cleanup_artifacts_removes_only_listed_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            request_file = tmp_path / "batch.jsonl"
+            manifest_file = tmp_path / "batch.manifest.json"
+            cache_file = tmp_path / "batch.progress.json"
+            request_file.write_text("{}", encoding="utf-8")
+            manifest_file.write_text("{}", encoding="utf-8")
+            cache_file.write_text("{}", encoding="utf-8")
+
+            cleanup_artifacts([request_file, manifest_file, request_file, tmp_path / "missing.json"])
+
+            self.assertFalse(request_file.exists())
+            self.assertFalse(manifest_file.exists())
+            self.assertTrue(cache_file.exists())
 
 
 def parse_args_for_test(argv: list[str]):

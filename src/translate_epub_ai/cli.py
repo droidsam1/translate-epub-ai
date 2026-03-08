@@ -10,9 +10,10 @@ from .batch_providers import build_grouped_requests, create_provider
 from .cache import ProgressCache
 from .epub import apply_translations, collect_pending_nodes, extract_epub, rebuild_epub
 from .models import PendingNode, TranslationConfig
-from .utils import log
+from .utils import log, stable_text_hash
 from .workflow import (
     build_round_config,
+    cleanup_artifacts,
     execute_batch_round,
     find_auto_repair_candidates,
     load_repair_items,
@@ -152,9 +153,10 @@ def run_follow_up_rounds(
     cache: ProgressCache,
     provider,
     artifact_provider,
-) -> tuple[int, int]:
+) -> tuple[int, int, list[Path]]:
     review_applied = 0
     auto_repair_applied = 0
+    artifacts: list[Path] = []
 
     if base_config.repair_file is None and base_config.review_passes > 0:
         review_candidates = build_review_candidates(pending, cache)
@@ -176,7 +178,7 @@ def run_follow_up_rounds(
                 base_config.max_items_per_request,
                 base_config.max_chars_per_request,
             )
-            review_batch, review_stored = execute_batch_round(
+            review_batch, review_stored, review_artifacts = execute_batch_round(
                 pending=review_candidates,
                 config=review_config,
                 cache=cache,
@@ -188,6 +190,7 @@ def run_follow_up_rounds(
                 resume_batch_id=None,
                 mode_label="review",
             )
+            artifacts.extend(review_artifacts)
             review_applied += review_stored
             if review_stored != len(review_candidates):
                 log("Review pass could not polish every fragment, but successful revisions were cached.")
@@ -215,7 +218,7 @@ def run_follow_up_rounds(
                 base_config.max_items_per_request,
                 base_config.max_chars_per_request,
             )
-            repair_batch, repair_stored = execute_batch_round(
+            repair_batch, repair_stored, repair_artifacts = execute_batch_round(
                 pending=repair_candidates,
                 config=repair_config,
                 cache=cache,
@@ -227,6 +230,7 @@ def run_follow_up_rounds(
                 resume_batch_id=None,
                 mode_label="repair",
             )
+            artifacts.extend(repair_artifacts)
             auto_repair_applied += repair_stored
             if repair_stored != len(repair_candidates):
                 log("Auto-repair could not fully repair every suspicious fragment, but successful fixes were cached.")
@@ -235,7 +239,7 @@ def run_follow_up_rounds(
             cached_translations = {stable_text_hash(item.core_text): cache.get(item.core_text) for item in pending}
             repair_candidates = find_auto_repair_candidates(pending, cached_translations, base_config.target_lang)
 
-    return review_applied, auto_repair_applied
+    return review_applied, auto_repair_applied, artifacts
 
 
 def run(config: TranslationConfig) -> int:
@@ -269,7 +273,7 @@ def run(config: TranslationConfig) -> int:
             config.max_items_per_request,
             config.max_chars_per_request,
         )
-        batch, stored = execute_batch_round(
+        batch, stored, artifacts = execute_batch_round(
             pending=pending,
             config=config,
             cache=cache,
@@ -296,16 +300,18 @@ def run(config: TranslationConfig) -> int:
             log(json.dumps(batch, ensure_ascii=False, indent=2))
             return 2
 
-        review_applied, auto_repair_applied = run_follow_up_rounds(
+        review_applied, auto_repair_applied, follow_up_artifacts = run_follow_up_rounds(
             pending=pending,
             base_config=config,
             cache=cache,
             provider=provider,
             artifact_provider=artifact_provider,
         )
+        artifacts.extend(follow_up_artifacts)
 
         translated_nodes = apply_translations(workdir, cache)
         rebuild_epub(workdir, config.output_epub)
+        cleanup_artifacts(artifacts)
 
         entries, approx_bytes = cache.stats()
         log(f"Done. Output: {config.output_epub}")

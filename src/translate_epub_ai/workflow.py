@@ -77,6 +77,17 @@ def make_round_artifact_path(base_path: Path, suffix: str) -> Path:
     return base_path.with_name(f"{base_path.stem}.{suffix}{base_path.suffix}")
 
 
+def round_artifact_paths(request_path: Path, manifest_path: Path) -> list[Path]:
+    return [request_path, manifest_path, request_path.with_suffix(".output.jsonl")]
+
+
+def cleanup_artifacts(paths: list[Path]) -> None:
+    for path in dict.fromkeys(paths):
+        if path.exists():
+            path.unlink()
+            log(f"Removed intermediate artifact: {path}")
+
+
 def count_words(text: str) -> int:
     return len(re.findall(r"[A-Za-zÀ-ÿ0-9]+", text))
 
@@ -208,7 +219,8 @@ def execute_batch_round(
     groups: list[list[PendingNode]],
     resume_batch_id: str | None,
     mode_label: str,
-) -> tuple[dict, int]:
+) -> tuple[dict, int, list[Path]]:
+    artifacts = round_artifact_paths(request_path, manifest_path)
     artifact_provider.build_request_artifact(
         request_path=request_path,
         manifest_path=manifest_path,
@@ -221,7 +233,7 @@ def execute_batch_round(
     log(f"Compression ratio: {len(pending) / len(groups):.1f} text nodes per batch request")
 
     if config.prepare_only:
-        return {}, 0
+        return {}, 0, artifacts
 
     if resume_batch_id:
         batch_id = resume_batch_id
@@ -249,7 +261,7 @@ def execute_batch_round(
     if output_bytes is None:
         log("Batch finished but no results payload is available yet.")
         log(json.dumps(batch, ensure_ascii=False, indent=2))
-        return batch, 0
+        return batch, 0, artifacts
 
     output_jsonl = request_path.with_suffix(".output.jsonl")
     output_jsonl.write_bytes(output_bytes)
@@ -268,4 +280,4 @@ def execute_batch_round(
 
     cache.save()
     log(f"Stored translations in cache: {stored}")
-    return batch, stored
+    return batch, stored, artifacts

@@ -21,6 +21,7 @@ def build_translation_prompt(
     current_translations: Optional[List[Optional[str]]] = None,
     context_hints: Optional[List[str]] = None,
     repair_mode: bool = False,
+    review_mode: bool = False,
 ) -> str:
     if target_lang.lower() == "es":
         locale_instruction = "natural European Spanish (Spanish as used in Spain)"
@@ -51,6 +52,20 @@ def build_translation_prompt(
         "- If a literal translation sounds wrong in the target language, rewrite it so it sounds native while preserving meaning and tone.\n"
         "- Keep each item aligned with the surrounding narrative or argument, even when the local sentence is ambiguous.\n"
     )
+
+    if review_mode:
+        prompt += (
+            "\nReview mode:\n"
+            "- You are reviewing an existing translation against the source text.\n"
+            "- For each item, keep the current translation if it is already strong, natural, and accurate.\n"
+            "- Revise it only when needed to improve fluency, precision, coherence, formatting, tone, or idiomatic quality.\n"
+            "- Return the final polished translation array only, not comments or explanations.\n"
+        )
+        if current_translations:
+            prompt += "\nCurrent translations to review:\n"
+            for index, current in enumerate(current_translations, start=1):
+                if current:
+                    prompt += f"- Item {index}: {json.dumps(current, ensure_ascii=False)}\n"
 
     if repair_mode:
         prompt += (

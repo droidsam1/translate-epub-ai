@@ -137,6 +137,7 @@ python translate_epub_batch_v3.py "book.epub" --to es --prompt-file my_prompt.tx
 
 Automatic repair is enabled by default:
 
+- after the main translation batch, the tool runs an editorial review pass over translated blocks
 - after the main translation batch
 - the tool looks for suspicious fragments
 - it automatically re-translates only those fragments
@@ -180,6 +181,12 @@ This means you can improve tone, style, and fluency without changing Python code
 If some translated lines still look broken, awkward, or unnatural, the tool now tries to repair suspicious fragments automatically in the same translation run.
 
 `--repair-file` is still available as an advanced option when you want to force selective retries for exact source fragments.
+
+You can also control the built-in review stage:
+
+```bash
+python translate_epub_batch_v3.py "book.epub" --to es --review-passes 1
+```
 
 ## Run tests
 

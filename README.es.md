@@ -137,6 +137,7 @@ python translate_epub_batch_v3.py "book.epub" --to es --prompt-file my_prompt.tx
 
 La reparación automática está activada por defecto:
 
+- después del batch principal, la herramienta hace una pasada editorial de revisión por bloques
 - después del batch principal de traducción
 - la herramienta busca fragmentos sospechosos
 - vuelve a traducir automáticamente solo esos fragmentos
@@ -180,6 +181,12 @@ Así puedes mejorar tono, estilo y fluidez sin tocar el código Python.
 Si algunas frases traducidas salen rotas, forzadas o poco naturales, la herramienta ahora intenta repararlas automáticamente en la misma ejecución.
 
 `--repair-file` sigue existiendo como opción avanzada cuando quieres forzar reintentos selectivos sobre fragmentos concretos.
+
+También puedes controlar la revisión editorial incorporada:
+
+```bash
+python translate_epub_batch_v3.py "book.epub" --to es --review-passes 1
+```
 
 ## Ejecutar tests
 

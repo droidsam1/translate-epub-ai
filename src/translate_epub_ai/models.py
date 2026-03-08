@@ -26,9 +26,11 @@ class TranslationConfig:
     manifest_file: Path
     source_lang: Optional[str]
     natural: bool
+    prompt_mode: str
     prompt_file: Optional[Path]
     repair_file: Optional[Path]
     auto_repair_rounds: int
+    review_passes: int
     completion_window: str
     poll_seconds: int
     max_items_per_request: int

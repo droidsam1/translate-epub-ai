@@ -19,6 +19,8 @@ class ProviderTests(unittest.TestCase):
         namespace = parse_args_for_test(["book.epub"])
         config = build_config(namespace)
         self.assertEqual("openai", config.provider)
+        self.assertEqual("translate", config.prompt_mode)
+        self.assertEqual(1, config.review_passes)
         self.assertEqual("OPENAI_API_KEY", required_api_key_env(config.provider))
 
     def test_anthropic_uses_own_api_key_env(self) -> None:

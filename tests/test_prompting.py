@@ -33,6 +33,18 @@ class PromptingTests(unittest.TestCase):
         self.assertIn("Current translations to review:", prompt)
         self.assertIn("Optional context hints:", prompt)
 
+    def test_review_mode_includes_editorial_revision_guidance(self) -> None:
+        prompt = build_translation_prompt(
+            payload_texts=["Original sentence."],
+            target_lang="es",
+            source_lang="en",
+            natural=True,
+            review_mode=True,
+            current_translations=["Una traducción aceptable pero mejorable."],
+        )
+        self.assertIn("Review mode:", prompt)
+        self.assertIn("keep the current translation if it is already strong", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

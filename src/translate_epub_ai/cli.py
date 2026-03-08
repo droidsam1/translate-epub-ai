@@ -270,6 +270,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest-file", type=Path, default=None, help="Prepared batch manifest path")
     parser.add_argument("--prompt-file", type=Path, default=None, help="Custom prompt template path")
     parser.add_argument("--repair-file", type=Path, default=None, help="JSON file with specific source fragments to retranslate and repair selectively")
+    parser.add_argument("--review-passes", type=int, default=1, help="Editorial review passes over translated blocks before the final EPUB is built")
     parser.add_argument("--auto-repair-rounds", type=int, default=1, help="Automatic selective repair passes after the main translation batch")
     parser.add_argument("--literal", action="store_true", help="Prefer a more literal translation style")
     parser.add_argument("--natural", action="store_true", help="Prefer a more literary translation style (default)")
@@ -296,9 +297,11 @@ def build_config(args: argparse.Namespace) -> TranslationConfig:
         manifest_file=args.manifest_file or make_manifest_name(args.input, args.provider, args.to, args.model),
         source_lang=args.from_lang,
         natural=natural,
+        prompt_mode="repair" if args.repair_file else "translate",
         prompt_file=args.prompt_file,
         repair_file=args.repair_file,
         auto_repair_rounds=max(0, args.auto_repair_rounds),
+        review_passes=max(0, args.review_passes),
         completion_window=args.completion_window,
         poll_seconds=args.poll_seconds,
         max_items_per_request=args.max_items_per_request,
@@ -405,9 +408,11 @@ def run(config: TranslationConfig) -> int:
                     manifest_file=repair_manifest_path,
                     source_lang=config.source_lang,
                     natural=config.natural,
+                    prompt_mode="repair",
                     prompt_file=config.prompt_file,
                     repair_file=Path(f"auto-repair-round-{round_number}.json"),
                     auto_repair_rounds=0,
+                    review_passes=0,
                     completion_window=config.completion_window,
                     poll_seconds=config.poll_seconds,
                     max_items_per_request=config.max_items_per_request,
@@ -447,6 +452,66 @@ def run(config: TranslationConfig) -> int:
                         )
                 repair_candidates = refreshed
 
+        review_applied = 0
+        if config.repair_file is None and config.review_passes > 0:
+            review_candidates = [
+                PendingNode(
+                    rel_path=item.rel_path,
+                    node_index=item.node_index,
+                    core_text=item.core_text,
+                    current_translation=cache.get(item.core_text),
+                    context_hint=f"Nearby file context: {item.rel_path}",
+                )
+                for item in pending
+                if cache.get(item.core_text)
+            ]
+            for round_number in range(1, config.review_passes + 1):
+                if not review_candidates:
+                    break
+                log(f"Review pass {round_number}: reviewing {len(review_candidates)} translated fragments.")
+                review_request_path = make_round_artifact_path(config.jsonl_file, f"review-{round_number}")
+                review_manifest_path = make_round_artifact_path(config.manifest_file, f"review-{round_number}")
+                review_config = TranslationConfig(
+                    input_epub=config.input_epub,
+                    provider=config.provider,
+                    target_lang=config.target_lang,
+                    model=config.model,
+                    output_epub=config.output_epub,
+                    cache_file=config.cache_file,
+                    jsonl_file=review_request_path,
+                    manifest_file=review_manifest_path,
+                    source_lang=config.source_lang,
+                    natural=config.natural,
+                    prompt_mode="review",
+                    prompt_file=config.prompt_file,
+                    repair_file=None,
+                    auto_repair_rounds=0,
+                    review_passes=0,
+                    completion_window=config.completion_window,
+                    poll_seconds=config.poll_seconds,
+                    max_items_per_request=config.max_items_per_request,
+                    max_chars_per_request=config.max_chars_per_request,
+                    max_output_tokens=config.max_output_tokens,
+                    prepare_only=False,
+                    resume_batch_id=None,
+                )
+                review_batch, review_stored, _ = execute_batch_round(
+                    pending=review_candidates,
+                    config=review_config,
+                    cache=cache,
+                    provider=provider,
+                    artifact_provider=artifact_provider,
+                    request_path=review_request_path,
+                    manifest_path=review_manifest_path,
+                    resume_batch_id=None,
+                    mode_label="review",
+                )
+                review_applied += review_stored
+                if review_stored != len(review_candidates):
+                    log("Review pass could not polish every fragment, but successful revisions were cached.")
+                    log(json.dumps(review_batch, ensure_ascii=False, indent=2))
+                    break
+
         if not provider.is_success_status(batch):
             log("Batch did not complete fully successfully, but parsed results were cached.")
             log(json.dumps(batch, ensure_ascii=False, indent=2))
@@ -461,6 +526,8 @@ def run(config: TranslationConfig) -> int:
             log(f"Repaired fragments applied into EPUB: {translated_nodes}")
         else:
             log(f"Translated nodes applied into EPUB: {translated_nodes}")
+            if review_applied:
+                log(f"Review-polished fragments: {review_applied}")
             if auto_repair_applied:
                 log(f"Auto-repaired fragments: {auto_repair_applied}")
         log(f"Cache entries: {entries} (~{approx_bytes} bytes)")

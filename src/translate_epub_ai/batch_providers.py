@@ -191,7 +191,8 @@ class OpenAIBatchProvider(BatchProvider):
                     prompt_file=config.prompt_file,
                     current_translations=[item.get("current_translation") for item in items],
                     context_hints=[item.get("context_hint", "") for item in items],
-                    repair_mode=bool(config.repair_file),
+                    repair_mode=config.prompt_mode == "repair",
+                    review_mode=config.prompt_mode == "review",
                 )
                 record = {
                     "custom_id": custom_id,
@@ -306,7 +307,8 @@ class AnthropicBatchProvider(BatchProvider):
                     prompt_file=config.prompt_file,
                     current_translations=[item.get("current_translation") for item in items],
                     context_hints=[item.get("context_hint", "") for item in items],
-                    repair_mode=bool(config.repair_file),
+                    repair_mode=config.prompt_mode == "repair",
+                    review_mode=config.prompt_mode == "review",
                 )
                 record = {
                     "custom_id": custom_id,

@@ -28,6 +28,7 @@ class TranslationConfig:
     natural: bool
     prompt_file: Optional[Path]
     repair_file: Optional[Path]
+    auto_repair_rounds: int
     completion_window: str
     poll_seconds: int
     max_items_per_request: int

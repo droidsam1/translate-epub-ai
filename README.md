@@ -135,6 +135,15 @@ Use a custom prompt file:
 python translate_epub_batch_v3.py "book.epub" --to es --prompt-file my_prompt.txt
 ```
 
+Automatic repair is enabled by default:
+
+- after the main translation batch
+- the tool looks for suspicious fragments
+- it automatically re-translates only those fragments
+- then it builds the final EPUB
+
+So in normal use, you do not need to manually review the whole book just to trigger repairs.
+
 Repair only specific bad phrases or paragraphs:
 
 ```bash
@@ -168,7 +177,9 @@ You can:
 
 This means you can improve tone, style, and fluency without changing Python code.
 
-If some translated lines still look broken, awkward, or unnatural, use `--repair-file` to retranslate only those source fragments and update the cache instead of retranslating the whole chapter.
+If some translated lines still look broken, awkward, or unnatural, the tool now tries to repair suspicious fragments automatically in the same translation run.
+
+`--repair-file` is still available as an advanced option when you want to force selective retries for exact source fragments.
 
 ## Run tests
 

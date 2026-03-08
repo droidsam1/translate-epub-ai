@@ -5,7 +5,13 @@ from pathlib import Path
 
 from translate_epub_ai.batch_providers import AnthropicBatchProvider
 from translate_epub_ai.cache import ProgressCache
-from translate_epub_ai.cli import build_config, load_repair_items, parse_args, required_api_key_env
+from translate_epub_ai.cli import (
+    build_config,
+    load_repair_items,
+    parse_args,
+    required_api_key_env,
+    should_auto_repair,
+)
 
 
 class ProviderTests(unittest.TestCase):
@@ -66,6 +72,33 @@ class ProviderTests(unittest.TestCase):
             self.assertEqual(1, len(items))
             self.assertEqual("Source text", items[0].core_text)
             self.assertEqual("Cached translation", items[0].current_translation)
+
+    def test_auto_repair_detects_broken_encoding_artifacts(self) -> None:
+        self.assertTrue(
+            should_auto_repair(
+                "A thoughtful sentence about knowledge and explanation.",
+                'Una frase extraña con "Â« comillas Â»" rotas.',
+                "es",
+            )
+        )
+
+    def test_auto_repair_detects_unchanged_english_output_for_spanish(self) -> None:
+        self.assertTrue(
+            should_auto_repair(
+                "This theory explains the structure of reality in a precise way.",
+                "This theory explains the structure of reality in a precise way.",
+                "es",
+            )
+        )
+
+    def test_auto_repair_does_not_flag_normal_spanish_sentence(self) -> None:
+        self.assertFalse(
+            should_auto_repair(
+                "This theory explains the structure of reality in a precise way.",
+                "Esta teoría explica la estructura de la realidad de una manera precisa.",
+                "es",
+            )
+        )
 
 
 def parse_args_for_test(argv: list[str]):

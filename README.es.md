@@ -135,6 +135,15 @@ Usar tu propio archivo de prompt:
 python translate_epub_batch_v3.py "book.epub" --to es --prompt-file my_prompt.txt
 ```
 
+La reparación automática está activada por defecto:
+
+- después del batch principal de traducción
+- la herramienta busca fragmentos sospechosos
+- vuelve a traducir automáticamente solo esos fragmentos
+- y luego construye el EPUB final
+
+Así que en el uso normal no tienes que revisar todo el libro manualmente solo para disparar reparaciones.
+
 Reparar solo frases o párrafos concretos que han quedado mal:
 
 ```bash
@@ -168,7 +177,9 @@ Puedes:
 
 Así puedes mejorar tono, estilo y fluidez sin tocar el código Python.
 
-Si algunas frases traducidas siguen saliendo rotas, forzadas o poco naturales, usa `--repair-file` para retraducir solo esos fragmentos de origen y actualizar la caché sin volver a traducir todo el capítulo.
+Si algunas frases traducidas salen rotas, forzadas o poco naturales, la herramienta ahora intenta repararlas automáticamente en la misma ejecución.
+
+`--repair-file` sigue existiendo como opción avanzada cuando quieres forzar reintentos selectivos sobre fragmentos concretos.
 
 ## Ejecutar tests
 

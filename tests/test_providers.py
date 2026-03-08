@@ -3,9 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from translate_epub_ai.batch_providers import AnthropicBatchProvider, build_grouped_requests
-from translate_epub_ai.cli import build_config, parse_args, required_api_key_env
-from translate_epub_ai.models import PendingNode
+from translate_epub_ai.batch_providers import AnthropicBatchProvider
+from translate_epub_ai.cache import ProgressCache
+from translate_epub_ai.cli import build_config, load_repair_items, parse_args, required_api_key_env
 
 
 class ProviderTests(unittest.TestCase):
@@ -22,11 +22,6 @@ class ProviderTests(unittest.TestCase):
         provider = AnthropicBatchProvider("test-key")
         with tempfile.TemporaryDirectory() as tmp_dir:
             manifest_path = Path(tmp_dir) / "manifest.json"
-            groups = build_grouped_requests(
-                [PendingNode(rel_path="chapter.xhtml", node_index=0, core_text="Hello world")],
-                max_items_per_request=12,
-                max_chars_per_request=5000,
-            )
             manifest = {
                 "group_000001": [
                     {
@@ -57,6 +52,20 @@ class ProviderTests(unittest.TestCase):
                 manifest_path=manifest_path,
             )
             self.assertEqual({"abc123": "Hola mundo"}, parsed)
+
+    def test_load_repair_items_uses_cache_when_current_translation_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            cache = ProgressCache(tmp_path / "cache.json")
+            cache.set("Source text", "Cached translation")
+            repair_file = tmp_path / "repair.json"
+            repair_file.write_text(json.dumps([{"source_text": "Source text"}]), encoding="utf-8")
+
+            items = load_repair_items(repair_file, cache)
+
+            self.assertEqual(1, len(items))
+            self.assertEqual("Source text", items[0].core_text)
+            self.assertEqual("Cached translation", items[0].current_translation)
 
 
 def parse_args_for_test(argv: list[str]):

@@ -126,6 +126,8 @@ def build_manifest(groups: List[List[PendingNode]]) -> Dict[str, List[dict]]:
                 "node_index": item.node_index,
                 "hash": stable_text_hash(item.core_text),
                 "core_text": item.core_text,
+                "current_translation": item.current_translation,
+                "context_hint": item.context_hint,
             }
             for item in group
         ]
@@ -187,6 +189,9 @@ class OpenAIBatchProvider(BatchProvider):
                     source_lang=config.source_lang,
                     natural=config.natural,
                     prompt_file=config.prompt_file,
+                    current_translations=[item.get("current_translation") for item in items],
+                    context_hints=[item.get("context_hint", "") for item in items],
+                    repair_mode=bool(config.repair_file),
                 )
                 record = {
                     "custom_id": custom_id,
@@ -299,6 +304,9 @@ class AnthropicBatchProvider(BatchProvider):
                     source_lang=config.source_lang,
                     natural=config.natural,
                     prompt_file=config.prompt_file,
+                    current_translations=[item.get("current_translation") for item in items],
+                    context_hints=[item.get("context_hint", "") for item in items],
+                    repair_mode=bool(config.repair_file),
                 )
                 record = {
                     "custom_id": custom_id,

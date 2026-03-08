@@ -9,7 +9,7 @@ from pathlib import Path
 from .batch_providers import build_grouped_requests, create_provider
 from .cache import ProgressCache
 from .epub import apply_translations, collect_pending_nodes, extract_epub, rebuild_epub
-from .models import TranslationConfig
+from .models import PendingNode, TranslationConfig
 from .utils import log, sanitized_model_name, stable_text_hash
 
 
@@ -53,6 +53,40 @@ def required_api_key_env(provider: str) -> str:
     return "OPENAI_API_KEY"
 
 
+def load_repair_items(repair_file: Path, cache: ProgressCache) -> list:
+    raw_items = json.loads(repair_file.read_text(encoding="utf-8"))
+    if not isinstance(raw_items, list) or not raw_items:
+        raise ValueError("Repair file must be a non-empty JSON array.")
+
+    items = []
+    for index, raw in enumerate(raw_items):
+        if isinstance(raw, str):
+            source_text = raw
+            current_translation = cache.get(source_text)
+            context_hint = ""
+        elif isinstance(raw, dict):
+            source_text = raw.get("source_text")
+            if not source_text:
+                raise ValueError(f"Repair item {index + 1} is missing 'source_text'.")
+            current_translation = raw.get("current_translation")
+            if current_translation is None:
+                current_translation = cache.get(source_text)
+            context_hint = str(raw.get("context_hint", ""))
+        else:
+            raise ValueError("Repair file entries must be strings or objects.")
+
+        items.append(
+            PendingNode(
+                rel_path=repair_file.name,
+                node_index=index,
+                core_text=str(source_text),
+                current_translation=current_translation,
+                context_hint=context_hint,
+            )
+        )
+    return items
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Translate an EPUB using a batch API while preserving ebook structure."
@@ -67,6 +101,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--jsonl-file", type=Path, default=None, help="Prepared batch JSONL path")
     parser.add_argument("--manifest-file", type=Path, default=None, help="Prepared batch manifest path")
     parser.add_argument("--prompt-file", type=Path, default=None, help="Custom prompt template path")
+    parser.add_argument("--repair-file", type=Path, default=None, help="JSON file with specific source fragments to retranslate and repair selectively")
     parser.add_argument("--literal", action="store_true", help="Prefer a more literal translation style")
     parser.add_argument("--natural", action="store_true", help="Prefer a more literary translation style (default)")
     parser.add_argument("--completion-window", default="24h", choices=["24h"])
@@ -93,6 +128,7 @@ def build_config(args: argparse.Namespace) -> TranslationConfig:
         source_lang=args.from_lang,
         natural=natural,
         prompt_file=args.prompt_file,
+        repair_file=args.repair_file,
         completion_window=args.completion_window,
         poll_seconds=args.poll_seconds,
         max_items_per_request=args.max_items_per_request,
@@ -110,6 +146,8 @@ def validate_config(config: TranslationConfig) -> None:
         raise ValueError("Input file must be an .epub")
     if config.prompt_file is not None and not config.prompt_file.exists():
         raise FileNotFoundError(f"Prompt template not found: {config.prompt_file}")
+    if config.repair_file is not None and not config.repair_file.exists():
+        raise FileNotFoundError(f"Repair file not found: {config.repair_file}")
 
 
 def run(config: TranslationConfig) -> int:
@@ -130,12 +168,20 @@ def run(config: TranslationConfig) -> int:
         log(f"Extracting EPUB: {config.input_epub}")
         extract_epub(config.input_epub, workdir)
 
-        pending, cache_hits, skipped = collect_pending_nodes(workdir, cache)
-        log(f"Pending untranslated text nodes: {len(pending)}")
-        log(f"Immediate cache hits: {cache_hits}")
-        log(f"Skipped navigation/package files: {len(skipped)}")
-        for rel_path in skipped[:10]:
-            log(f"  skipped: {rel_path}")
+        if config.repair_file is not None:
+            pending = load_repair_items(config.repair_file, cache)
+            cache_hits = sum(1 for item in pending if item.current_translation)
+            skipped = []
+            log(f"Selective repair mode enabled: {config.repair_file}")
+            log(f"Repair fragments queued: {len(pending)}")
+            log(f"Existing cached translations available for review: {cache_hits}")
+        else:
+            pending, cache_hits, skipped = collect_pending_nodes(workdir, cache)
+            log(f"Pending untranslated text nodes: {len(pending)}")
+            log(f"Immediate cache hits: {cache_hits}")
+            log(f"Skipped navigation/package files: {len(skipped)}")
+            for rel_path in skipped[:10]:
+                log(f"  skipped: {rel_path}")
 
         if not pending:
             translated_nodes = apply_translations(workdir, cache)
@@ -177,6 +223,7 @@ def run(config: TranslationConfig) -> int:
                     "target_lang": config.target_lang,
                     "model": config.model,
                     "prompt_style": "natural" if config.natural else "literal",
+                    "mode": "repair" if config.repair_file else "translate",
                 },
                 completion_window=config.completion_window,
             )
@@ -228,7 +275,10 @@ def run(config: TranslationConfig) -> int:
 
         entries, approx_bytes = cache.stats()
         log(f"Done. Output: {config.output_epub}")
-        log(f"Translated nodes applied into EPUB: {translated_nodes}")
+        if config.repair_file:
+            log(f"Repaired fragments applied into EPUB: {translated_nodes}")
+        else:
+            log(f"Translated nodes applied into EPUB: {translated_nodes}")
         log(f"Cache entries: {entries} (~{approx_bytes} bytes)")
         log(f"Last batch id: {batch_id}")
         return 0

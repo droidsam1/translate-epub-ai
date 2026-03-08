@@ -135,6 +135,24 @@ Use a custom prompt file:
 python translate_epub_batch_v3.py "book.epub" --to es --prompt-file my_prompt.txt
 ```
 
+Repair only specific bad phrases or paragraphs:
+
+```bash
+python translate_epub_batch_v3.py "book.epub" --to es --repair-file repair.json
+```
+
+Example `repair.json`:
+
+```json
+[
+  "The original English sentence that needs a better translation.",
+  {
+    "source_text": "A difficult paragraph from the source book.",
+    "context_hint": "This section is technical and should sound precise but natural."
+  }
+]
+```
+
 ## Want better translation style?
 
 The default prompt lives here:
@@ -149,6 +167,8 @@ You can:
 - pass your own file with `--prompt-file`
 
 This means you can improve tone, style, and fluency without changing Python code.
+
+If some translated lines still look broken, awkward, or unnatural, use `--repair-file` to retranslate only those source fragments and update the cache instead of retranslating the whole chapter.
 
 ## Run tests
 

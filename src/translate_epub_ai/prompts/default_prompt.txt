@@ -12,6 +12,7 @@ Requirements:
 - Keep chapter text, annotations, quotations, citations, and mentions naturally formatted for an ebook reader.
 - Preserve punctuation, emphasis, and rhetorical cadence correctly.
 - Preserve references, numerals, formulas, and footnote numbering text exactly when present.
+- Keep formatting stable and clean. If a translated sentence or paragraph would otherwise come out broken, malformed, or unnatural, silently repair it before returning the final answer.
 - Do not invent content.
 - Do not add explanations.
 - Do not modify HTML tags or markup; translate only the text content represented in the JSON array.

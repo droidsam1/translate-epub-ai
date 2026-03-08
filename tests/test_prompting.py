@@ -17,6 +17,21 @@ class PromptingTests(unittest.TestCase):
         self.assertIn("exactly 2 translated strings", prompt)
         self.assertIn("Preserve the author's voice and register", prompt)
         self.assertIn("prioritize precision, clarity, and terminological consistency", prompt)
+        self.assertIn("silently check that it is coherent, natural, idiomatic", prompt)
+
+    def test_repair_mode_includes_revision_guidance(self) -> None:
+        prompt = build_translation_prompt(
+            payload_texts=["Original sentence."],
+            target_lang="es",
+            source_lang="en",
+            natural=True,
+            repair_mode=True,
+            current_translations=["Traducción rara y rota."],
+            context_hints=["This paragraph explains a technical argument."],
+        )
+        self.assertIn("Repair mode:", prompt)
+        self.assertIn("Current translations to review:", prompt)
+        self.assertIn("Optional context hints:", prompt)
 
 
 if __name__ == "__main__":

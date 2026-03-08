@@ -10,6 +10,8 @@ class PendingNode:
     rel_path: str
     node_index: int
     core_text: str
+    current_translation: Optional[str] = None
+    context_hint: str = ""
 
 
 @dataclass(frozen=True)
@@ -25,6 +27,7 @@ class TranslationConfig:
     source_lang: Optional[str]
     natural: bool
     prompt_file: Optional[Path]
+    repair_file: Optional[Path]
     completion_window: str
     poll_seconds: int
     max_items_per_request: int

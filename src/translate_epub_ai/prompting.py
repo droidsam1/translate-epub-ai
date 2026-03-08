@@ -18,6 +18,9 @@ def build_translation_prompt(
     source_lang: Optional[str],
     natural: bool,
     prompt_file: Optional[Path] = None,
+    current_translations: Optional[List[Optional[str]]] = None,
+    context_hints: Optional[List[str]] = None,
+    repair_mode: bool = False,
 ) -> str:
     if target_lang.lower() == "es":
         locale_instruction = "natural European Spanish (Spanish as used in Spain)"
@@ -33,7 +36,7 @@ def build_translation_prompt(
     )
 
     template = load_prompt_template(prompt_file)
-    return template.format(
+    prompt = template.format(
         source_language_clause=f" from {source_lang}" if source_lang else "",
         target_language_name=locale_instruction,
         style_instruction=style_instruction,
@@ -41,3 +44,32 @@ def build_translation_prompt(
         item_count=len(payload_texts),
         payload_json=json.dumps(payload_texts, ensure_ascii=False),
     )
+    prompt += (
+        "\n\nQuality control:\n"
+        "- Before finalizing each item, silently check that it is coherent, natural, idiomatic, and consistent with the likely surrounding document.\n"
+        "- Fix broken phrasing, unnatural calques, punctuation issues, register mismatches, and formatting glitches before returning the final JSON.\n"
+        "- If a literal translation sounds wrong in the target language, rewrite it so it sounds native while preserving meaning and tone.\n"
+        "- Keep each item aligned with the surrounding narrative or argument, even when the local sentence is ambiguous.\n"
+    )
+
+    if repair_mode:
+        prompt += (
+            "\nRepair mode:\n"
+            "- You are revising only suspicious or low-quality translated items, not retranslating a whole chapter.\n"
+            "- Correct only the items that need improvement, but return the full final corrected array in order.\n"
+            "- Prioritize fixing broken formatting, awkward wording, lost meaning, unnatural phrasing, and inconsistencies with the rest of the document.\n"
+        )
+        if current_translations:
+            prompt += "\nCurrent translations to review:\n"
+            for index, current in enumerate(current_translations, start=1):
+                if current:
+                    prompt += f"- Item {index}: {json.dumps(current, ensure_ascii=False)}\n"
+        if context_hints:
+            context_lines = [hint for hint in context_hints if hint]
+            if context_lines:
+                prompt += "\nOptional context hints:\n"
+                for index, hint in enumerate(context_hints, start=1):
+                    if hint:
+                        prompt += f"- Item {index}: {json.dumps(hint, ensure_ascii=False)}\n"
+
+    return prompt

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -20,6 +21,12 @@ OPENAI_RESPONSES_ENDPOINT = "/v1/responses"
 
 ANTHROPIC_BATCHES_URL = "https://api.anthropic.com/v1/messages/batches"
 ANTHROPIC_VERSION = "2023-06-01"
+
+
+@dataclass(frozen=True)
+class ParsedBatchOutput:
+    translations_by_hash: Dict[str, str]
+    malformed_groups: Dict[str, str]
 
 
 class BatchProvider(ABC):
@@ -59,7 +66,7 @@ class BatchProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def parse_grouped_output(self, output_bytes: bytes, manifest_path: Path) -> Dict[str, str]:
+    def parse_grouped_output(self, output_bytes: bytes, manifest_path: Path) -> ParsedBatchOutput:
         raise NotImplementedError
 
     def wait_for_batch(self, batch_id: str, poll_seconds: int) -> dict:
@@ -134,22 +141,27 @@ def build_manifest(groups: List[List[PendingNode]]) -> Dict[str, List[dict]]:
     return manifest
 
 
-def parse_translated_array(raw_output: Optional[str], expected: List[dict]) -> Dict[str, str]:
+def parse_translated_array(raw_output: Optional[str], expected: List[dict]) -> tuple[Dict[str, str], Optional[str]]:
     if not raw_output:
-        return {}
+        return {}, "empty output"
 
     try:
         translated_items = json.loads(clean_json_text(raw_output))
-    except json.JSONDecodeError:
-        return {}
+    except json.JSONDecodeError as error:
+        return {}, f"invalid JSON: {error.msg}"
 
-    if not isinstance(translated_items, list) or len(translated_items) != len(expected):
-        return {}
+    if not isinstance(translated_items, list):
+        return {}, f"expected a JSON array, got {type(translated_items).__name__}"
+    if len(translated_items) != len(expected):
+        return {}, f"expected {len(expected)} items, got {len(translated_items)}"
 
-    return {
-        item_meta["hash"]: str(translated)
-        for item_meta, translated in zip(expected, translated_items)
-    }
+    return (
+        {
+            item_meta["hash"]: str(translated)
+            for item_meta, translated in zip(expected, translated_items)
+        },
+        None,
+    )
 
 
 class OpenAIBatchProvider(BatchProvider):
@@ -258,9 +270,11 @@ class OpenAIBatchProvider(BatchProvider):
             return None
         return self.download_file_content(output_file_id)
 
-    def parse_grouped_output(self, output_bytes: bytes, manifest_path: Path) -> Dict[str, str]:
+    def parse_grouped_output(self, output_bytes: bytes, manifest_path: Path) -> ParsedBatchOutput:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         translations_by_hash: Dict[str, str] = {}
+        malformed_groups: Dict[str, str] = {}
+        seen_groups: set[str] = set()
         output_text = output_bytes.decode("utf-8", errors="replace")
 
         for line in output_text.splitlines():
@@ -270,10 +284,22 @@ class OpenAIBatchProvider(BatchProvider):
             custom_id = record.get("custom_id")
             if not custom_id or custom_id not in manifest:
                 continue
+            seen_groups.add(custom_id)
             raw_output = extract_openai_output_text((record.get("response") or {}).get("body") or {})
-            translations_by_hash.update(parse_translated_array(raw_output, manifest[custom_id]))
+            parsed_group, issue = parse_translated_array(raw_output, manifest[custom_id])
+            if issue is not None:
+                malformed_groups[custom_id] = issue
+                continue
+            translations_by_hash.update(parsed_group)
 
-        return translations_by_hash
+        for custom_id in manifest:
+            if custom_id not in seen_groups:
+                malformed_groups.setdefault(custom_id, "missing output record")
+
+        return ParsedBatchOutput(
+            translations_by_hash=translations_by_hash,
+            malformed_groups=malformed_groups,
+        )
 
 
 class AnthropicBatchProvider(BatchProvider):
@@ -365,9 +391,11 @@ class AnthropicBatchProvider(BatchProvider):
         response.raise_for_status()
         return response.content
 
-    def parse_grouped_output(self, output_bytes: bytes, manifest_path: Path) -> Dict[str, str]:
+    def parse_grouped_output(self, output_bytes: bytes, manifest_path: Path) -> ParsedBatchOutput:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         translations_by_hash: Dict[str, str] = {}
+        malformed_groups: Dict[str, str] = {}
+        seen_groups: set[str] = set()
         output_text = output_bytes.decode("utf-8", errors="replace")
 
         for line in output_text.splitlines():
@@ -377,14 +405,26 @@ class AnthropicBatchProvider(BatchProvider):
             custom_id = record.get("custom_id")
             if not custom_id or custom_id not in manifest:
                 continue
+            seen_groups.add(custom_id)
             result = record.get("result") or {}
             if result.get("type") != "succeeded":
                 continue
             message = result.get("message") or {}
             raw_output = extract_anthropic_output_text(message)
-            translations_by_hash.update(parse_translated_array(raw_output, manifest[custom_id]))
+            parsed_group, issue = parse_translated_array(raw_output, manifest[custom_id])
+            if issue is not None:
+                malformed_groups[custom_id] = issue
+                continue
+            translations_by_hash.update(parsed_group)
 
-        return translations_by_hash
+        for custom_id in manifest:
+            if custom_id not in seen_groups:
+                malformed_groups.setdefault(custom_id, "missing output record")
+
+        return ParsedBatchOutput(
+            translations_by_hash=translations_by_hash,
+            malformed_groups=malformed_groups,
+        )
 
 
 def extract_openai_output_text(body: dict) -> Optional[str]:

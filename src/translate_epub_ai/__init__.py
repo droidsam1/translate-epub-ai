@@ -1,5 +1,3 @@
-"""Tools for translating EPUB files with the OpenAI Batch API."""
+"""Tools for translating EPUB files with batch LLM APIs."""
 
-from .cli import main
-
-__all__ = ["main"]
+__all__: list[str] = []

@@ -7,9 +7,12 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .batch_providers import build_grouped_requests
 from .cache import ProgressCache
 from .models import PendingNode, TranslationConfig
 from .utils import log, sanitized_model_name, stable_text_hash
+
+FORMAT_RETRY_PASSES = 1
 
 
 def make_output_name(input_path: Path, target_lang: str) -> Path:
@@ -207,6 +210,16 @@ def build_round_config(
     )
 
 
+def malformed_group_items(groups: list[list[PendingNode]], group_ids: list[str]) -> list[PendingNode]:
+    selected: list[PendingNode] = []
+    wanted = set(group_ids)
+    for group_index, group in enumerate(groups, start=1):
+        custom_id = f"group_{group_index:06d}"
+        if custom_id in wanted:
+            selected.extend(group)
+    return selected
+
+
 def execute_batch_round(
     *,
     pending: list[PendingNode],
@@ -219,6 +232,7 @@ def execute_batch_round(
     groups: list[list[PendingNode]],
     resume_batch_id: str | None,
     mode_label: str,
+    format_retry_attempts_left: int = FORMAT_RETRY_PASSES,
 ) -> tuple[dict, int, list[Path]]:
     artifacts = round_artifact_paths(request_path, manifest_path)
     artifact_provider.build_request_artifact(
@@ -268,16 +282,74 @@ def execute_batch_round(
     log(f"Saved batch output JSONL: {output_jsonl}")
 
     parsed = provider.parse_grouped_output(output_bytes, manifest_path)
-    if not parsed:
+    if not parsed.translations_by_hash and not parsed.malformed_groups:
         raise RuntimeError("No grouped translations could be parsed from batch output.")
 
     stored = 0
     for item in pending:
-        translated = parsed.get(stable_text_hash(item.core_text))
+        translated = parsed.translations_by_hash.get(stable_text_hash(item.core_text))
         if translated is not None:
             cache.set(item.core_text, translated)
             stored += 1
 
     cache.save()
     log(f"Stored translations in cache: {stored}")
+
+    if parsed.malformed_groups:
+        malformed_ids = sorted(parsed.malformed_groups)
+        sample_details = ", ".join(
+            f"{group_id} ({parsed.malformed_groups[group_id]})" for group_id in malformed_ids[:3]
+        )
+        if len(malformed_ids) > 3:
+            sample_details += ", ..."
+        log(
+            f"Detected {len(malformed_ids)} malformed {mode_label} group(s): {sample_details}"
+        )
+
+        if format_retry_attempts_left > 0:
+            retry_pending = malformed_group_items(groups, malformed_ids)
+            if retry_pending:
+                log(
+                    f"Retrying {len(retry_pending)} fragment(s) from malformed {mode_label} groups "
+                    f"as single-item requests."
+                )
+                retry_request_path = make_round_artifact_path(
+                    request_path,
+                    f"format-retry-{FORMAT_RETRY_PASSES - format_retry_attempts_left + 1}",
+                )
+                retry_manifest_path = make_round_artifact_path(
+                    manifest_path,
+                    f"format-retry-{FORMAT_RETRY_PASSES - format_retry_attempts_left + 1}",
+                )
+                retry_config = build_round_config(
+                    base_config=config,
+                    request_path=retry_request_path,
+                    manifest_path=retry_manifest_path,
+                    prompt_mode=config.prompt_mode,
+                    repair_file=config.repair_file,
+                )
+                retry_groups = build_grouped_requests(
+                    retry_pending,
+                    max_items_per_request=1,
+                    max_chars_per_request=max(1, config.max_chars_per_request),
+                )
+                retry_batch, retry_stored, retry_artifacts = execute_batch_round(
+                    pending=retry_pending,
+                    config=retry_config,
+                    cache=cache,
+                    provider=provider,
+                    artifact_provider=artifact_provider,
+                    request_path=retry_request_path,
+                    manifest_path=retry_manifest_path,
+                    groups=retry_groups,
+                    resume_batch_id=None,
+                    mode_label=f"{mode_label} retry",
+                    format_retry_attempts_left=format_retry_attempts_left - 1,
+                )
+                artifacts.extend(retry_artifacts)
+                stored += retry_stored
+                batch = retry_batch if retry_stored == len(retry_pending) else batch
+        else:
+            log(f"Automatic malformed-output retries exhausted for {mode_label}.")
+
     return batch, stored, artifacts

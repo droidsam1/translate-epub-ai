@@ -126,8 +126,7 @@ python -m translate_epub_ai "book.epub" --resume-batch-id batch_123
 Important:
 
 - if you do not set `--provider`, it still uses `openai`
-- `python -m translate_epub_ai` is the recommended command now
-- `python translate_epub_batch_v3.py` is still available as a legacy compatibility wrapper
+- `python -m translate_epub_ai` is the recommended direct command
 - cache and resume still work so translated segments are not requested again
 
 Use a custom prompt file:

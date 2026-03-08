@@ -332,7 +332,7 @@ def parse_args_for_test(argv: list[str]):
 
     old_argv = sys.argv
     try:
-        sys.argv = ["translate_epub_batch_v3.py", *argv]
+        sys.argv = ["translate_epub_ai", *argv]
         return parse_args()
     finally:
         sys.argv = old_argv

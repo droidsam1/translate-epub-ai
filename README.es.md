@@ -1,6 +1,6 @@
 # translate-epub-ai
 
-Traduce libros EPUB con OpenAI de forma sencilla y con comandos fáciles de copiar y pegar.
+Traduce libros EPUB con OpenAI o Anthropic de forma sencilla y con comandos fáciles de copiar y pegar.
 
 [Read in English](README.md)
 
@@ -11,7 +11,7 @@ Traduce libros EPUB con OpenAI de forma sencilla y con comandos fáciles de copi
 Si solo quieres la ruta rápida:
 
 1. Instala el proyecto.
-2. Configura `OPENAI_API_KEY`.
+2. Configura tu API key.
 3. Ejecuta un comando.
 
 ```bash
@@ -33,7 +33,7 @@ La herramienta:
 
 - abre el EPUB de forma segura
 - encuentra el texto legible
-- envía los trabajos de traducción mediante OpenAI Batch API
+- envía los trabajos de traducción mediante una API batch
 - mantiene la estructura original del EPUB
 - genera un EPUB traducido
 - guarda progreso para poder reanudar más tarde
@@ -41,7 +41,7 @@ La herramienta:
 ## Qué necesitas
 
 - Python 3.10 o superior
-- una API key de OpenAI
+- una API key de OpenAI o de Anthropic
 
 ## Instalar
 
@@ -51,24 +51,42 @@ Abre una terminal en la carpeta del proyecto y ejecuta:
 pip install -e .
 ```
 
-## Configurar tu API key de OpenAI
+## Configurar tu API key
 
-PowerShell:
+OpenAI en PowerShell:
 
 ```powershell
 $env:OPENAI_API_KEY="tu_api_key_aqui"
 ```
 
-Command Prompt (`cmd`):
+Anthropic en PowerShell:
+
+```powershell
+$env:ANTHROPIC_API_KEY="tu_api_key_aqui"
+```
+
+OpenAI en Command Prompt (`cmd`):
 
 ```cmd
 set OPENAI_API_KEY=tu_api_key_aqui
+```
+
+Anthropic en Command Prompt (`cmd`):
+
+```cmd
+set ANTHROPIC_API_KEY=tu_api_key_aqui
 ```
 
 macOS / Linux:
 
 ```bash
 export OPENAI_API_KEY="tu_api_key_aqui"
+```
+
+Anthropic en macOS / Linux:
+
+```bash
+export ANTHROPIC_API_KEY="tu_api_key_aqui"
 ```
 
 ## Traducir tu primer libro
@@ -85,6 +103,12 @@ Ejemplo indicando modelo:
 python translate_epub_batch_v3.py "book.epub" --to es --model gpt-4.1-mini
 ```
 
+Ejemplo con Anthropic:
+
+```bash
+python translate_epub_batch_v3.py "book.epub" --provider anthropic --model claude-sonnet-4-20250514 --to es
+```
+
 ## Comandos útiles
 
 Preparar todo pero sin enviar todavía el batch:
@@ -98,6 +122,12 @@ Reanudar un batch que ya existe:
 ```bash
 python translate_epub_batch_v3.py "book.epub" --resume-batch-id batch_123
 ```
+
+Importante:
+
+- si no indicas `--provider`, seguirá usando `openai`
+- esto mantiene compatibilidad con el uso anterior
+- la caché y la reanudación siguen evitando llamadas repetidas y gasto extra de tokens
 
 Usar tu propio archivo de prompt:
 
@@ -131,7 +161,7 @@ python -m unittest discover -s tests -v
 ```text
 src/translate_epub_ai/cli.py
 src/translate_epub_ai/epub.py
-src/translate_epub_ai/openai_batch.py
+src/translate_epub_ai/batch_providers.py
 src/translate_epub_ai/prompting.py
 tests/
 ```
@@ -140,7 +170,7 @@ tests/
 
 - `cli.py`: punto de entrada por línea de comandos
 - `epub.py`: extrae y reconstruye archivos EPUB
-- `openai_batch.py`: construye batches y lee sus resultados
+- `batch_providers.py`: lógica específica de OpenAI y Anthropic para batches
 - `prompting.py`: genera el prompt de traducción
 - `tests/`: ayuda a que los cambios sean más seguros
 
@@ -155,6 +185,12 @@ Este repositorio comprueba ahora mismo:
 ## Solución de problemas
 
 Si ves `OPENAI_API_KEY is not set`, primero configura la variable de entorno.
+
+Si usas Anthropic, configura `ANTHROPIC_API_KEY` y añade:
+
+```bash
+--provider anthropic
+```
 
 Si quieres inspeccionar los archivos del batch antes de enviarlos, usa:
 

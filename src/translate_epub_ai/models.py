@@ -15,6 +15,7 @@ class PendingNode:
 @dataclass(frozen=True)
 class TranslationConfig:
     input_epub: Path
+    provider: str
     target_lang: str
     model: str
     output_epub: Path
@@ -28,5 +29,6 @@ class TranslationConfig:
     poll_seconds: int
     max_items_per_request: int
     max_chars_per_request: int
+    max_output_tokens: int
     prepare_only: bool
     resume_batch_id: Optional[str]

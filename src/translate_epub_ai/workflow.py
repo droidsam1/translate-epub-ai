@@ -464,7 +464,7 @@ def execute_batch_round(
                 mode_label=f"{mode_label} retry",
                 format_retry_attempts_left=format_retry_attempts_left - 1,
             )
-            artifacts.extend(retry_artifacts)
+            cleanup_artifacts(retry_artifacts)
             stored += retry_stored
             batch = retry_batch if retry_stored == len(retry_pending) else batch
         else:

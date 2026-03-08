@@ -254,6 +254,9 @@ class ProviderTests(unittest.TestCase):
             self.assertEqual("Primero", cache.get("First fragment"))
             self.assertEqual("Segundo", cache.get("Second fragment"))
             self.assertEqual([2, 1, 1], provider.group_sizes_seen)
+            self.assertFalse((tmp_path / "batch.format-retry-1.jsonl").exists())
+            self.assertFalse((tmp_path / "manifest.format-retry-1.json").exists())
+            self.assertFalse((tmp_path / "batch.format-retry-1.output.jsonl").exists())
 
     def test_execute_batch_round_retries_suspicious_section_leakage(self) -> None:
         pending = [

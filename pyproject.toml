@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "translate-epub-ai"
+version = "0.1.0"
+description = "Translate EPUB files with the OpenAI Batch API while preserving ebook structure."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "beautifulsoup4>=4.12",
+  "lxml>=5.0",
+  "requests>=2.31",
+]
+
+[project.scripts]
+translate-epub-ai = "translate_epub_ai.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+translate_epub_ai = ["prompts/*.txt"]

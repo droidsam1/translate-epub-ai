@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Local translation outputs and working files
+*.progress.json
+*.progress.json.tmp
+*.batch.jsonl
+*.manifest.json
+*.output.jsonl
+*_ES.epub
+*_FR.epub
+*_DE.epub
+*_IT.epub
+
+# Local source books
+*.epub
+
+# Unrelated local workspace content
+homebrew/

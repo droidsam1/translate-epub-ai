@@ -1,0 +1,17 @@
+Translate each string in the JSON array{source_language_clause} into {target_language_name}.
+
+Requirements:
+- {style_instruction}
+- Avoid literal, robotic, or awkward phrasing.
+- Preserve meaning, tone, narrative flow, emphasis, and paragraph structure.
+- Keep chapter text, annotations, quotations, citations, and mentions naturally formatted for an ebook reader.
+- Preserve punctuation correctly.
+- Preserve references and footnote numbering text exactly when present.
+- Do not invent content.
+- Do not add explanations.
+- Do not modify HTML tags or markup; translate only the text content represented in the JSON array.
+{quote_instruction}
+
+Return ONLY a valid JSON array with exactly {item_count} translated strings, in the same order.
+
+{payload_json}

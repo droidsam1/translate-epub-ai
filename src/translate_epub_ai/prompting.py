@@ -18,6 +18,7 @@ def build_translation_prompt(
     source_lang: Optional[str],
     natural: bool,
     prompt_file: Optional[Path] = None,
+    payload_ids: Optional[List[str]] = None,
     current_translations: Optional[List[Optional[str]]] = None,
     context_hints: Optional[List[str]] = None,
     repair_mode: bool = False,
@@ -37,13 +38,23 @@ def build_translation_prompt(
     )
 
     template = load_prompt_template(prompt_file)
+    prompt_items = []
+    for index, text in enumerate(payload_texts):
+        item = {
+            "id": payload_ids[index] if payload_ids else f"item-{index + 1}",
+            "text": text,
+        }
+        if context_hints and index < len(context_hints) and context_hints[index]:
+            item["context"] = context_hints[index]
+        prompt_items.append(item)
+
     prompt = template.format(
         source_language_clause=f" from {source_lang}" if source_lang else "",
         target_language_name=locale_instruction,
         style_instruction=style_instruction,
         quote_instruction=f"- {quote_instruction}" if quote_instruction else "",
         item_count=len(payload_texts),
-        payload_json=json.dumps(payload_texts, ensure_ascii=False),
+        payload_json=json.dumps(prompt_items, ensure_ascii=False),
     )
     prompt += (
         "\n\nQuality control:\n"
@@ -51,6 +62,8 @@ def build_translation_prompt(
         "- Fix broken phrasing, unnatural calques, punctuation issues, register mismatches, and formatting glitches before returning the final JSON.\n"
         "- If a literal translation sounds wrong in the target language, rewrite it so it sounds native while preserving meaning and tone.\n"
         "- Keep each item aligned with the surrounding narrative or argument, even when the local sentence is ambiguous.\n"
+        "- Never merge one item's content into another item, and never import text from neighboring sections unless it is already present in the source item.\n"
+        "- Treat each item's id as binding: return exactly one translation for that same id, with no extra ids and no missing ids.\n"
     )
 
     if review_mode:
@@ -65,7 +78,8 @@ def build_translation_prompt(
             prompt += "\nCurrent translations to review:\n"
             for index, current in enumerate(current_translations, start=1):
                 if current:
-                    prompt += f"- Item {index}: {json.dumps(current, ensure_ascii=False)}\n"
+                    item_id = payload_ids[index - 1] if payload_ids else f"item-{index}"
+                    prompt += f"- {item_id}: {json.dumps(current, ensure_ascii=False)}\n"
 
     if repair_mode:
         prompt += (
@@ -78,13 +92,15 @@ def build_translation_prompt(
             prompt += "\nCurrent translations to review:\n"
             for index, current in enumerate(current_translations, start=1):
                 if current:
-                    prompt += f"- Item {index}: {json.dumps(current, ensure_ascii=False)}\n"
+                    item_id = payload_ids[index - 1] if payload_ids else f"item-{index}"
+                    prompt += f"- {item_id}: {json.dumps(current, ensure_ascii=False)}\n"
         if context_hints:
             visible_hints = [hint for hint in context_hints if hint]
             if visible_hints:
                 prompt += "\nOptional context hints:\n"
                 for index, hint in enumerate(context_hints, start=1):
                     if hint:
-                        prompt += f"- Item {index}: {json.dumps(hint, ensure_ascii=False)}\n"
+                        item_id = payload_ids[index - 1] if payload_ids else f"item-{index}"
+                        prompt += f"- {item_id}: {json.dumps(hint, ensure_ascii=False)}\n"
 
     return prompt

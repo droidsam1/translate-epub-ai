@@ -3,6 +3,7 @@
 import zipfile
 from pathlib import Path
 from typing import List, Optional, Tuple
+import re
 
 from bs4 import BeautifulSoup, Comment
 from lxml import etree
@@ -11,6 +12,8 @@ from .cache import ProgressCache
 from .constants import HTML_EXTS, PACKAGE_EXTS, SKIP_TAGS
 from .models import PendingNode
 from .utils import is_probably_text, leading_trailing_ws
+
+CONTEXT_SNIPPET_LIMIT = 72
 
 
 def extract_epub(epub_path: Path, workdir: Path) -> None:
@@ -95,6 +98,47 @@ def collect_text_slots_fallback(path: Path) -> List[str]:
     return slots
 
 
+def compact_context_text(text: str, limit: int = CONTEXT_SNIPPET_LIMIT) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 1].rstrip() + "…"
+
+
+def infer_node_kind(core_text: str) -> str:
+    normalized = " ".join(core_text.split())
+    words = re.findall(r"\w+", normalized, flags=re.UNICODE)
+    if len(words) <= 8 and len(normalized) <= 80 and normalized == normalized.title():
+        return "heading"
+    if len(words) <= 4 and normalized.isupper():
+        return "heading"
+    if len(words) <= 10 and normalized.endswith(":"):
+        return "heading"
+    return "paragraph"
+
+
+def build_context_hint(core_slots: List[str], node_index: int) -> str:
+    previous_text = ""
+    next_text = ""
+
+    for previous_index in range(node_index - 1, -1, -1):
+        if core_slots[previous_index]:
+            previous_text = compact_context_text(core_slots[previous_index])
+            break
+
+    for next_index in range(node_index + 1, len(core_slots)):
+        if core_slots[next_index]:
+            next_text = compact_context_text(core_slots[next_index])
+            break
+
+    pieces = [f"kind={infer_node_kind(core_slots[node_index])}"]
+    if previous_text:
+        pieces.append(f'prev="{previous_text}"')
+    if next_text:
+        pieces.append(f'next="{next_text}"')
+    return "; ".join(pieces)
+
+
 def collect_pending_nodes(workdir: Path, cache: ProgressCache) -> Tuple[List[PendingNode], int, List[str]]:
     pending: List[PendingNode] = []
     cache_hits = 0
@@ -111,12 +155,24 @@ def collect_pending_nodes(workdir: Path, cache: ProgressCache) -> Tuple[List[Pen
         except Exception:
             slots = collect_text_slots_fallback(file_path)
 
+        core_slots: List[str] = []
+        for raw_text in slots:
+            _, core, _ = leading_trailing_ws(raw_text)
+            core_slots.append(core if is_probably_text(core) else "")
+
         for node_index, raw_text in enumerate(slots):
             _, core, _ = leading_trailing_ws(raw_text)
             if not is_probably_text(core):
                 continue
             if cache.get(core) is None:
-                pending.append(PendingNode(rel_path=rel_path, node_index=node_index, core_text=core))
+                pending.append(
+                    PendingNode(
+                        rel_path=rel_path,
+                        node_index=node_index,
+                        core_text=core,
+                        context_hint=build_context_hint(core_slots, node_index),
+                    )
+                )
             else:
                 cache_hits += 1
 

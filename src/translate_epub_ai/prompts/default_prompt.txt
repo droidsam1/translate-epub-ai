@@ -1,4 +1,4 @@
-Translate each string in the JSON array{source_language_clause} into {target_language_name}.
+Translate each item's "text"{source_language_clause} into {target_language_name}.
 
 Requirements:
 - {style_instruction}
@@ -18,6 +18,9 @@ Requirements:
 - Do not modify HTML tags or markup; translate only the text content represented in the JSON array.
 {quote_instruction}
 
-Return ONLY a valid JSON array with exactly {item_count} translated strings, in the same order.
+Return ONLY a valid JSON array with exactly {item_count} objects, in the same order.
+Each object must contain exactly:
+- "id": copy the original item id exactly
+- "translation": the translated text for that item only
 
 {payload_json}

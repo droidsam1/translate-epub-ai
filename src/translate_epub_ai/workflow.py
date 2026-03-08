@@ -13,6 +13,30 @@ from .models import PendingNode, TranslationConfig
 from .utils import log, sanitized_model_name, stable_text_hash
 
 FORMAT_RETRY_PASSES = 1
+SECTION_MARKERS = {
+    "es": {
+        "agradecimientos",
+        "bibliografía",
+        "contenido",
+        "índice",
+        "prefacio",
+        "prólogo",
+        "apéndice",
+        "notas",
+        "referencias",
+    },
+    "en": {
+        "acknowledgements",
+        "bibliography",
+        "contents",
+        "index",
+        "preface",
+        "prologue",
+        "appendix",
+        "notes",
+        "references",
+    },
+}
 
 
 def make_output_name(input_path: Path, target_lang: str) -> Path:
@@ -95,6 +119,48 @@ def count_words(text: str) -> int:
     return len(re.findall(r"[A-Za-zÀ-ÿ0-9]+", text))
 
 
+def normalize_text(text: str) -> str:
+    return " ".join(text.split())
+
+
+def extract_context_kind(context_hint: str) -> str:
+    match = re.search(r"\bkind=([a-z]+)\b", context_hint)
+    return match.group(1) if match else "paragraph"
+
+
+def looks_like_heading(text: str) -> bool:
+    normalized = normalize_text(text)
+    if not normalized:
+        return False
+    words = re.findall(r"[A-Za-zÀ-ÿ0-9]+", normalized)
+    if len(words) > 10 or len(normalized) > 90:
+        return False
+    if normalized.endswith(":"):
+        return True
+    if normalized == normalized.title():
+        return True
+    return len(words) <= 4 and normalized.isupper()
+
+
+def contains_section_leakage(source_text: str, translated_text: str, target_lang: str) -> bool:
+    source = normalize_text(source_text).lower()
+    translated = normalize_text(translated_text).lower()
+    if count_words(source_text) < 8:
+        return False
+
+    markers = SECTION_MARKERS.get(target_lang.lower(), set())
+    for marker in markers:
+        if marker in translated and marker not in source:
+            return True
+
+    for segment in translated_text.splitlines():
+        stripped = normalize_text(segment)
+        if stripped and looks_like_heading(stripped) and stripped.lower() not in source and len(translated_text.splitlines()) > 1:
+            return True
+
+    return False
+
+
 def has_broken_encoding_artifacts(text: str) -> bool:
     return any(token in text for token in ("\u00c2", "\u00c3", "\ufffd"))
 
@@ -153,6 +219,24 @@ def should_auto_repair(source_text: str, translated_text: str, target_lang: str)
             return True
 
     return False
+
+
+def translation_issue(item: PendingNode, translated_text: str, target_lang: str) -> str | None:
+    source_words = count_words(item.core_text)
+    translated_words = count_words(translated_text)
+    context_kind = extract_context_kind(item.context_hint)
+
+    if should_auto_repair(item.core_text, translated_text, target_lang):
+        return "failed quality heuristics"
+    if contains_section_leakage(item.core_text, translated_text, target_lang):
+        return "possible section leakage from a neighboring fragment"
+    if context_kind == "heading" and translated_words >= max(10, source_words * 3):
+        return "heading expanded into paragraph-like output"
+    if context_kind == "paragraph" and source_words >= 8 and looks_like_heading(translated_text):
+        return "paragraph collapsed into heading-like output"
+    if translated_text.count("\n\n") > item.core_text.count("\n\n") + 1:
+        return "unexpected extra paragraph breaks"
+    return None
 
 
 def find_auto_repair_candidates(
@@ -218,6 +302,18 @@ def malformed_group_items(groups: list[list[PendingNode]], group_ids: list[str])
         if custom_id in wanted:
             selected.extend(group)
     return selected
+
+
+def dedupe_pending_nodes(items: list[PendingNode]) -> list[PendingNode]:
+    deduped: list[PendingNode] = []
+    seen_hashes: set[str] = set()
+    for item in items:
+        item_hash = stable_text_hash(item.core_text)
+        if item_hash in seen_hashes:
+            continue
+        seen_hashes.add(item_hash)
+        deduped.append(item)
+    return deduped
 
 
 def execute_batch_round(
@@ -286,9 +382,25 @@ def execute_batch_round(
         raise RuntimeError("No grouped translations could be parsed from batch output.")
 
     stored = 0
+    suspicious_items: list[PendingNode] = []
     for item in pending:
         translated = parsed.translations_by_hash.get(stable_text_hash(item.core_text))
         if translated is not None:
+            issue = translation_issue(item, translated, config.target_lang)
+            if issue is not None:
+                suspicious_items.append(
+                    PendingNode(
+                        rel_path=item.rel_path,
+                        node_index=item.node_index,
+                        core_text=item.core_text,
+                        current_translation=translated,
+                        context_hint=item.context_hint,
+                    )
+                )
+                log(
+                    f"Rejected suspicious {mode_label} fragment {item.rel_path}#{item.node_index}: {issue}"
+                )
+                continue
             cache.set(item.core_text, translated)
             stored += 1
 
@@ -306,49 +418,55 @@ def execute_batch_round(
             f"Detected {len(malformed_ids)} malformed {mode_label} group(s): {sample_details}"
         )
 
+    retry_pending = malformed_group_items(groups, sorted(parsed.malformed_groups))
+    if suspicious_items:
+        log(f"Detected {len(suspicious_items)} suspicious {mode_label} fragment(s) that will be retried.")
+        retry_pending.extend(suspicious_items)
+
+    retry_pending = dedupe_pending_nodes(retry_pending)
+    if retry_pending:
         if format_retry_attempts_left > 0:
-            retry_pending = malformed_group_items(groups, malformed_ids)
-            if retry_pending:
-                log(
-                    f"Retrying {len(retry_pending)} fragment(s) from malformed {mode_label} groups "
-                    f"as single-item requests."
-                )
-                retry_request_path = make_round_artifact_path(
-                    request_path,
-                    f"format-retry-{FORMAT_RETRY_PASSES - format_retry_attempts_left + 1}",
-                )
-                retry_manifest_path = make_round_artifact_path(
-                    manifest_path,
-                    f"format-retry-{FORMAT_RETRY_PASSES - format_retry_attempts_left + 1}",
-                )
-                retry_config = build_round_config(
-                    base_config=config,
-                    request_path=retry_request_path,
-                    manifest_path=retry_manifest_path,
-                    prompt_mode=config.prompt_mode,
-                    repair_file=config.repair_file,
-                )
-                retry_groups = build_grouped_requests(
-                    retry_pending,
-                    max_items_per_request=1,
-                    max_chars_per_request=max(1, config.max_chars_per_request),
-                )
-                retry_batch, retry_stored, retry_artifacts = execute_batch_round(
-                    pending=retry_pending,
-                    config=retry_config,
-                    cache=cache,
-                    provider=provider,
-                    artifact_provider=artifact_provider,
-                    request_path=retry_request_path,
-                    manifest_path=retry_manifest_path,
-                    groups=retry_groups,
-                    resume_batch_id=None,
-                    mode_label=f"{mode_label} retry",
-                    format_retry_attempts_left=format_retry_attempts_left - 1,
-                )
-                artifacts.extend(retry_artifacts)
-                stored += retry_stored
-                batch = retry_batch if retry_stored == len(retry_pending) else batch
+            log(
+                f"Retrying {len(retry_pending)} fragment(s) from malformed or suspicious {mode_label} output "
+                f"as single-item requests."
+            )
+            retry_request_path = make_round_artifact_path(
+                request_path,
+                f"format-retry-{FORMAT_RETRY_PASSES - format_retry_attempts_left + 1}",
+            )
+            retry_manifest_path = make_round_artifact_path(
+                manifest_path,
+                f"format-retry-{FORMAT_RETRY_PASSES - format_retry_attempts_left + 1}",
+            )
+            retry_prompt_mode = "repair" if any(item.current_translation for item in retry_pending) else config.prompt_mode
+            retry_config = build_round_config(
+                base_config=config,
+                request_path=retry_request_path,
+                manifest_path=retry_manifest_path,
+                prompt_mode=retry_prompt_mode,
+                repair_file=config.repair_file if retry_prompt_mode == "repair" else None,
+            )
+            retry_groups = build_grouped_requests(
+                retry_pending,
+                max_items_per_request=1,
+                max_chars_per_request=max(1, config.max_chars_per_request),
+            )
+            retry_batch, retry_stored, retry_artifacts = execute_batch_round(
+                pending=retry_pending,
+                config=retry_config,
+                cache=cache,
+                provider=provider,
+                artifact_provider=artifact_provider,
+                request_path=retry_request_path,
+                manifest_path=retry_manifest_path,
+                groups=retry_groups,
+                resume_batch_id=None,
+                mode_label=f"{mode_label} retry",
+                format_retry_attempts_left=format_retry_attempts_left - 1,
+            )
+            artifacts.extend(retry_artifacts)
+            stored += retry_stored
+            batch = retry_batch if retry_stored == len(retry_pending) else batch
         else:
             log(f"Automatic malformed-output retries exhausted for {mode_label}.")
 

@@ -129,6 +129,7 @@ def build_manifest(groups: List[List[PendingNode]]) -> Dict[str, List[dict]]:
         custom_id = f"group_{group_index:06d}"
         manifest[custom_id] = [
             {
+                "item_id": f"{custom_id}_item_{item_index:03d}",
                 "rel_path": item.rel_path,
                 "node_index": item.node_index,
                 "hash": stable_text_hash(item.core_text),
@@ -136,7 +137,7 @@ def build_manifest(groups: List[List[PendingNode]]) -> Dict[str, List[dict]]:
                 "current_translation": item.current_translation,
                 "context_hint": item.context_hint,
             }
-            for item in group
+            for item_index, item in enumerate(group, start=1)
         ]
     return manifest
 
@@ -155,13 +156,38 @@ def parse_translated_array(raw_output: Optional[str], expected: List[dict]) -> t
     if len(translated_items) != len(expected):
         return {}, f"expected {len(expected)} items, got {len(translated_items)}"
 
-    return (
-        {
-            item_meta["hash"]: str(translated)
-            for item_meta, translated in zip(expected, translated_items)
-        },
-        None,
-    )
+    if all(isinstance(item, str) for item in translated_items):
+        return (
+            {
+                item_meta["hash"]: str(translated)
+                for item_meta, translated in zip(expected, translated_items)
+            },
+            None,
+        )
+
+    if not all(isinstance(item, dict) for item in translated_items):
+        return {}, "expected either translated strings or {id, translation} objects"
+
+    translations_by_hash: Dict[str, str] = {}
+    expected_by_id = {item["item_id"]: item for item in expected}
+    seen_ids: set[str] = set()
+
+    for raw_item in translated_items:
+        item_id = raw_item.get("id")
+        translation = raw_item.get("translation")
+        if not isinstance(item_id, str) or item_id not in expected_by_id:
+            return {}, f"unexpected item id: {item_id!r}"
+        if item_id in seen_ids:
+            return {}, f"duplicate item id: {item_id}"
+        if not isinstance(translation, str):
+            return {}, f"missing translation text for item id: {item_id}"
+        seen_ids.add(item_id)
+        translations_by_hash[expected_by_id[item_id]["hash"]] = translation
+
+    if len(seen_ids) != len(expected):
+        return {}, f"expected {len(expected)} unique item ids, got {len(seen_ids)}"
+
+    return translations_by_hash, None
 
 
 class OpenAIBatchProvider(BatchProvider):
@@ -197,6 +223,7 @@ class OpenAIBatchProvider(BatchProvider):
                 payload_texts = [item["core_text"] for item in items]
                 prompt = build_translation_prompt(
                     payload_texts=payload_texts,
+                    payload_ids=[item["item_id"] for item in items],
                     target_lang=config.target_lang,
                     source_lang=config.source_lang,
                     natural=config.natural,
@@ -327,6 +354,7 @@ class AnthropicBatchProvider(BatchProvider):
                 payload_texts = [item["core_text"] for item in items]
                 prompt = build_translation_prompt(
                     payload_texts=payload_texts,
+                    payload_ids=[item["item_id"] for item in items],
                     target_lang=config.target_lang,
                     source_lang=config.source_lang,
                     natural=config.natural,

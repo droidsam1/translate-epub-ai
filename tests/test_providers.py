@@ -11,6 +11,7 @@ from translate_epub_ai.cli import build_config, parse_args
 from translate_epub_ai.models import PendingNode, TranslationConfig
 from translate_epub_ai.workflow import (
     cleanup_artifacts,
+    contains_section_leakage,
     execute_batch_round,
     load_repair_items,
     required_api_key_env,
@@ -92,6 +93,38 @@ class ProviderTests(unittest.TestCase):
             self.assertEqual({}, parsed.translations_by_hash)
             self.assertEqual({"group_000001": "expected 2 items, got 1"}, parsed.malformed_groups)
 
+    def test_openai_parser_accepts_object_output_with_ids(self) -> None:
+        provider = OpenAIBatchProvider("test-key")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manifest_path = Path(tmp_dir) / "manifest.json"
+            manifest = {
+                "group_000001": [
+                    {
+                        "item_id": "group_000001_item_001",
+                        "rel_path": "chapter.xhtml",
+                        "node_index": 0,
+                        "hash": "abc123",
+                        "core_text": "One",
+                    }
+                ]
+            }
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            output_line = {
+                "custom_id": "group_000001",
+                "response": {
+                    "body": {
+                        "output_text": '[{"id":"group_000001_item_001","translation":"Uno"}]'
+                    }
+                },
+            }
+            parsed = provider.parse_grouped_output(
+                output_bytes=(json.dumps(output_line) + "\n").encode("utf-8"),
+                manifest_path=manifest_path,
+            )
+
+            self.assertEqual({"abc123": "Uno"}, parsed.translations_by_hash)
+            self.assertEqual({}, parsed.malformed_groups)
+
     def test_load_repair_items_uses_cache_when_current_translation_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -133,6 +166,15 @@ class ProviderTests(unittest.TestCase):
             )
         )
 
+    def test_section_leakage_detection_flags_heading_inside_paragraph(self) -> None:
+        self.assertTrue(
+            contains_section_leakage(
+                "The growth of knowledge depends on correcting mistakes through criticism and explanation.",
+                "El crecimiento del conocimiento depende de corregir errores mediante crítica y explicación. Agradecimientos",
+                "es",
+            )
+        )
+
     def test_cleanup_artifacts_removes_only_listed_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -151,8 +193,8 @@ class ProviderTests(unittest.TestCase):
 
     def test_execute_batch_round_retries_only_malformed_groups(self) -> None:
         pending = [
-            PendingNode(rel_path="chapter.xhtml", node_index=0, core_text="First fragment"),
-            PendingNode(rel_path="chapter.xhtml", node_index=1, core_text="Second fragment"),
+            PendingNode(rel_path="chapter.xhtml", node_index=0, core_text="First fragment", context_hint="kind=paragraph"),
+            PendingNode(rel_path="chapter.xhtml", node_index=1, core_text="Second fragment", context_hint="kind=paragraph"),
         ]
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -186,11 +228,11 @@ class ProviderTests(unittest.TestCase):
             provider = FakeOpenAIProvider(
                 outputs=[
                     {
-                        "group_000001": '["Primero"]',
+                        "group_000001": '[{"id":"group_000001_item_001","translation":"Primero"}]',
                     },
                     {
-                        "group_000001": '["Primero"]',
-                        "group_000002": '["Segundo"]',
+                        "group_000001": '[{"id":"group_000001_item_001","translation":"Primero"}]',
+                        "group_000002": '[{"id":"group_000002_item_001","translation":"Segundo"}]',
                     },
                 ]
             )
@@ -212,6 +254,74 @@ class ProviderTests(unittest.TestCase):
             self.assertEqual("Primero", cache.get("First fragment"))
             self.assertEqual("Segundo", cache.get("Second fragment"))
             self.assertEqual([2, 1, 1], provider.group_sizes_seen)
+
+    def test_execute_batch_round_retries_suspicious_section_leakage(self) -> None:
+        pending = [
+            PendingNode(
+                rel_path="chapter.xhtml",
+                node_index=0,
+                core_text="Knowledge grows through conjecture and criticism over long stretches of history.",
+                context_hint='kind=paragraph; prev="Earlier paragraph"; next="Later paragraph"',
+            )
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            config = TranslationConfig(
+                input_epub=tmp_path / "book.epub",
+                provider="openai",
+                target_lang="es",
+                model="gpt-4.1-mini",
+                output_epub=tmp_path / "book_ES.epub",
+                cache_file=tmp_path / "cache.json",
+                jsonl_file=tmp_path / "batch.jsonl",
+                manifest_file=tmp_path / "manifest.json",
+                source_lang="en",
+                natural=True,
+                prompt_mode="translate",
+                prompt_file=None,
+                repair_file=None,
+                auto_repair_rounds=0,
+                review_passes=0,
+                completion_window="24h",
+                poll_seconds=0,
+                max_items_per_request=12,
+                max_chars_per_request=5000,
+                max_output_tokens=4096,
+                prepare_only=False,
+                resume_batch_id=None,
+            )
+            cache = ProgressCache(config.cache_file)
+            provider = FakeOpenAIProvider(
+                outputs=[
+                    {
+                        "group_000001": '[{"id":"group_000001_item_001","translation":"El conocimiento crece mediante conjeturas y crítica. Agradecimientos"}]',
+                    },
+                    {
+                        "group_000001": '[{"id":"group_000001_item_001","translation":"El conocimiento crece mediante conjeturas y crítica a lo largo de la historia."}]',
+                    },
+                ]
+            )
+
+            _, stored, _ = execute_batch_round(
+                pending=pending,
+                config=config,
+                cache=cache,
+                provider=provider,
+                artifact_provider=provider,
+                request_path=config.jsonl_file,
+                manifest_path=config.manifest_file,
+                groups=[pending],
+                resume_batch_id=None,
+                mode_label="translate",
+            )
+
+            self.assertEqual(1, stored)
+            self.assertEqual(
+                "El conocimiento crece mediante conjeturas y crítica a lo largo de la historia.",
+                cache.get(pending[0].core_text),
+            )
+            self.assertEqual([1, 1], provider.group_sizes_seen)
 
 
 def parse_args_for_test(argv: list[str]):

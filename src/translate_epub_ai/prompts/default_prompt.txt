@@ -24,8 +24,9 @@ Requirements:
 {quote_instruction}
 
 Return ONLY a valid JSON array with exactly {item_count} objects, in the same order.
-Each object must contain exactly:
+Each object must contain:
 - "id": copy the original item id exactly
 - "translation": the translated text for that item only
+- "doubt" (optional): only if you were genuinely unsure, a short reason
 
 {payload_json}

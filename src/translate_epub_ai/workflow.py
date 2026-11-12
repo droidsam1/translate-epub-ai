@@ -10,6 +10,7 @@ from typing import Any
 from .batch_providers import build_grouped_requests
 from .cache import ProgressCache
 from .models import PendingNode, TranslationConfig
+from .quality import ReviewItem, book_length_ratio, detect_weak_points
 from .segments import MARKER_RE, validate_markers
 from .utils import log, normalize_spanish_quotes, sanitized_model_name, stable_text_hash
 
@@ -245,6 +246,60 @@ def translation_issue(item: PendingNode, translated_text: str, target_lang: str)
     return None
 
 
+def build_review_candidates(
+    nodes: list[PendingNode],
+    cache: ProgressCache,
+    scope: str,
+    glossary: dict[str, str] | None,
+    source_lang: str | None,
+) -> list[PendingNode]:
+    """Pick the paragraphs to review and tell the reviewer why.
+
+    `nodes` must be in reading order: each candidate carries the translation
+    of the paragraph before it, so seams between requests can be checked.
+    """
+    translated = [(node, cache.get(node.core_text)) for node in nodes]
+    typical_ratio = book_length_ratio(
+        ReviewItem(node.core_text, translation) for node, translation in translated if translation
+    )
+    candidates: list[PendingNode] = []
+    seen: set[str] = set()
+    previous: tuple[str, str | None] = ("", None)
+    for node, translation in translated:
+        previous_translation = previous[1] if previous[0] == node.rel_path else None
+        previous = (node.rel_path, translation)
+        if not translation or node.core_text in seen:
+            continue
+        seen.add(node.core_text)
+        item = ReviewItem(
+            source=node.core_text,
+            translation=translation,
+            kind=extract_context_kind(node.context_hint),
+            doubt=cache.get_note(node.core_text),
+        )
+        notes = detect_weak_points(
+            item,
+            typical_ratio=typical_ratio,
+            glossary=glossary,
+            source_lang=source_lang,
+            include_back_references=previous_translation is not None,
+        )
+        if scope != "all" and not notes:
+            continue
+        candidates.append(
+            PendingNode(
+                rel_path=node.rel_path,
+                node_index=node.node_index,
+                core_text=node.core_text,
+                current_translation=translation,
+                context_hint=node.context_hint,
+                previous_translation=previous_translation,
+                review_notes="; ".join(notes),
+            )
+        )
+    return candidates
+
+
 def find_auto_repair_candidates(
     pending: list[PendingNode],
     cached_translations: dict[str, str | None],
@@ -298,6 +353,12 @@ def build_round_config(
         prepare_only=False,
         resume_batch_id=None,
         glossary_file=base_config.glossary_file,
+        reasoning_effort=base_config.reasoning_effort,
+        review_scope=base_config.review_scope,
+        skip_index=base_config.skip_index,
+        review_existing=False,
+        auto_glossary=False,
+        glossary_only=False,
     )
 
 
@@ -411,6 +472,7 @@ def execute_batch_round(
                 )
                 continue
             cache.set(item.core_text, translated)
+            cache.set_note(item.core_text, parsed.doubts_by_hash.get(stable_text_hash(item.core_text)))
             stored += 1
 
     cache.save()

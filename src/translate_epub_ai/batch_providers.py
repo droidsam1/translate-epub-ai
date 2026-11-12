@@ -6,14 +6,14 @@ import json
 import os
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import requests
 
 from .models import PendingNode, TranslationConfig
-from .prompting import build_translation_prompt, load_glossary
+from .prompting import PromptParts, build_prompt_parts, load_glossary
 from .utils import clean_json_text, dump_json, log, stable_text_hash
 
 OPENAI_FILES_URL = "https://api.openai.com/v1/files"
@@ -21,6 +21,7 @@ OPENAI_BATCHES_URL = "https://api.openai.com/v1/batches"
 OPENAI_RESPONSES_ENDPOINT = "/v1/responses"
 
 ANTHROPIC_BATCHES_URL = "https://api.anthropic.com/v1/messages/batches"
+ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 
 OLLAMA_DEFAULT_HOST = "http://localhost:11434"
@@ -28,7 +29,11 @@ OLLAMA_RESPONSE_SCHEMA = {
     "type": "array",
     "items": {
         "type": "object",
-        "properties": {"id": {"type": "string"}, "translation": {"type": "string"}},
+        "properties": {
+            "id": {"type": "string"},
+            "translation": {"type": "string"},
+            "doubt": {"type": "string"},
+        },
         "required": ["id", "translation"],
     },
 }
@@ -38,6 +43,7 @@ OLLAMA_RESPONSE_SCHEMA = {
 class ParsedBatchOutput:
     translations_by_hash: Dict[str, str]
     malformed_groups: Dict[str, str]
+    doubts_by_hash: Dict[str, str] = field(default_factory=dict)
 
 
 class BatchProvider(ABC):
@@ -78,6 +84,12 @@ class BatchProvider(ABC):
 
     @abstractmethod
     def parse_grouped_output(self, output_bytes: bytes, manifest_path: Path) -> ParsedBatchOutput:
+        raise NotImplementedError
+
+    def complete(
+        self, instructions: str, request: str, model: str, max_tokens: int, schema: Optional[dict] = None
+    ) -> str:
+        """One direct (non-batch) call. Used for small jobs such as building a glossary."""
         raise NotImplementedError
 
     def wait_for_batch(self, batch_id: str, poll_seconds: int) -> dict:
@@ -134,6 +146,41 @@ def build_grouped_requests(
     return groups
 
 
+def prompt_parts_for(items: List[dict], config: TranslationConfig) -> PromptParts:
+    return build_prompt_parts(
+        payload_texts=[item["core_text"] for item in items],
+        payload_ids=[item["item_id"] for item in items],
+        target_lang=config.target_lang,
+        source_lang=config.source_lang,
+        natural=config.natural,
+        prompt_file=config.prompt_file,
+        current_translations=[item.get("current_translation") for item in items],
+        context_hints=[item.get("context_hint", "") for item in items],
+        previous_translations=[item.get("previous_translation") for item in items],
+        review_notes=[item.get("review_notes", "") for item in items],
+        repair_mode=config.prompt_mode == "repair",
+        review_mode=config.prompt_mode == "review",
+        glossary=load_glossary(config.glossary_file),
+    )
+
+
+def prompt_cache_key(parts: PromptParts) -> str:
+    return "translate-epub-ai-" + stable_text_hash(parts.instructions)[:24]
+
+
+def openai_reasoning_effort(config: TranslationConfig) -> Optional[str]:
+    """Translation needs no hidden reasoning; it only adds cost and latency."""
+    if config.reasoning_effort:
+        return None if config.reasoning_effort == "default" else config.reasoning_effort
+    if config.model.startswith("gpt-5.6"):
+        return "none"
+    return None
+
+
+def group_content_hash(items: List[dict]) -> str:
+    return stable_text_hash("\u241e".join(item["hash"] for item in items))
+
+
 def build_manifest(groups: List[List[PendingNode]]) -> Dict[str, List[dict]]:
     manifest: Dict[str, List[dict]] = {}
     for group_index, group in enumerate(groups, start=1):
@@ -147,10 +194,30 @@ def build_manifest(groups: List[List[PendingNode]]) -> Dict[str, List[dict]]:
                 "core_text": item.core_text,
                 "current_translation": item.current_translation,
                 "context_hint": item.context_hint,
+                "previous_translation": item.previous_translation,
+                "review_notes": item.review_notes,
             }
             for item_index, item in enumerate(group, start=1)
         ]
     return manifest
+
+
+def extract_doubts(raw_output: Optional[str], expected: List[dict]) -> Dict[str, str]:
+    """Collect the optional "doubt" notes the model attached to items."""
+    try:
+        items = json.loads(clean_json_text(raw_output or ""))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(items, list):
+        return {}
+    hash_by_id = {item["item_id"]: item["hash"] for item in expected if item.get("item_id")}
+    doubts: Dict[str, str] = {}
+    for item in items:
+        if isinstance(item, dict) and item.get("id") in hash_by_id:
+            doubt = item.get("doubt")
+            if isinstance(doubt, str) and doubt.strip():
+                doubts[hash_by_id[item["id"]]] = doubt.strip()[:300]
+    return doubts
 
 
 def parse_translated_array(raw_output: Optional[str], expected: List[dict]) -> tuple[Dict[str, str], Optional[str]]:
@@ -201,12 +268,41 @@ def parse_translated_array(raw_output: Optional[str], expected: List[dict]) -> t
     return translations_by_hash, None
 
 
+def openai_body(config: TranslationConfig, parts: PromptParts) -> dict:
+    body = {
+        "model": config.model,
+        "instructions": parts.instructions,
+        "input": parts.request,
+        "prompt_cache_key": prompt_cache_key(parts),
+        "max_output_tokens": config.max_output_tokens,
+    }
+    effort = openai_reasoning_effort(config)
+    if effort:
+        body["reasoning"] = {"effort": effort}
+    return body
+
+
 class OpenAIBatchProvider(BatchProvider):
     provider_name = "openai"
 
     @property
     def headers(self) -> dict:
         return {"Authorization": f"Bearer {self.api_key}"}
+
+    def complete(
+        self, instructions: str, request: str, model: str, max_tokens: int, schema: Optional[dict] = None
+    ) -> str:
+        body = {"model": model, "instructions": instructions, "input": request, "max_output_tokens": max_tokens}
+        if model.startswith("gpt-5.6"):
+            body["reasoning"] = {"effort": "none"}
+        response = requests.post(
+            "https://api.openai.com/v1/responses",
+            headers={**self.headers, "Content-Type": "application/json"},
+            json=body,
+            timeout=600,
+        )
+        response.raise_for_status()
+        return extract_openai_output_text(response.json()) or ""
 
     def upload_file(self, path: Path, purpose: str = "batch") -> str:
         with path.open("rb") as file_handle:
@@ -231,25 +327,12 @@ class OpenAIBatchProvider(BatchProvider):
 
         with request_path.open("w", encoding="utf-8") as handle:
             for custom_id, items in manifest.items():
-                payload_texts = [item["core_text"] for item in items]
-                prompt = build_translation_prompt(
-                    payload_texts=payload_texts,
-                    payload_ids=[item["item_id"] for item in items],
-                    target_lang=config.target_lang,
-                    source_lang=config.source_lang,
-                    natural=config.natural,
-                    prompt_file=config.prompt_file,
-                    current_translations=[item.get("current_translation") for item in items],
-                    context_hints=[item.get("context_hint", "") for item in items],
-                    repair_mode=config.prompt_mode == "repair",
-                    review_mode=config.prompt_mode == "review",
-                    glossary=load_glossary(config.glossary_file),
-                )
+                parts = prompt_parts_for(items, config)
                 record = {
                     "custom_id": custom_id,
                     "method": "POST",
                     "url": OPENAI_RESPONSES_ENDPOINT,
-                    "body": {"model": config.model, "input": prompt},
+                    "body": openai_body(config, parts),
                 }
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
@@ -313,6 +396,7 @@ class OpenAIBatchProvider(BatchProvider):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         translations_by_hash: Dict[str, str] = {}
         malformed_groups: Dict[str, str] = {}
+        doubts_by_hash: Dict[str, str] = {}
         seen_groups: set[str] = set()
         output_text = output_bytes.decode("utf-8", errors="replace")
 
@@ -325,11 +409,13 @@ class OpenAIBatchProvider(BatchProvider):
                 continue
             seen_groups.add(custom_id)
             raw_output = extract_openai_output_text((record.get("response") or {}).get("body") or {})
+            raw_output_for_doubts = raw_output
             parsed_group, issue = parse_translated_array(raw_output, manifest[custom_id])
             if issue is not None:
                 malformed_groups[custom_id] = issue
                 continue
             translations_by_hash.update(parsed_group)
+            doubts_by_hash.update(extract_doubts(raw_output_for_doubts, manifest[custom_id]))
 
         for custom_id in manifest:
             if custom_id not in seen_groups:
@@ -338,6 +424,7 @@ class OpenAIBatchProvider(BatchProvider):
         return ParsedBatchOutput(
             translations_by_hash=translations_by_hash,
             malformed_groups=malformed_groups,
+            doubts_by_hash=doubts_by_hash,
         )
 
 
@@ -363,31 +450,38 @@ class AnthropicBatchProvider(BatchProvider):
 
         with request_path.open("w", encoding="utf-8") as handle:
             for custom_id, items in manifest.items():
-                payload_texts = [item["core_text"] for item in items]
-                prompt = build_translation_prompt(
-                    payload_texts=payload_texts,
-                    payload_ids=[item["item_id"] for item in items],
-                    target_lang=config.target_lang,
-                    source_lang=config.source_lang,
-                    natural=config.natural,
-                    prompt_file=config.prompt_file,
-                    current_translations=[item.get("current_translation") for item in items],
-                    context_hints=[item.get("context_hint", "") for item in items],
-                    repair_mode=config.prompt_mode == "repair",
-                    review_mode=config.prompt_mode == "review",
-                    glossary=load_glossary(config.glossary_file),
-                )
+                parts = prompt_parts_for(items, config)
                 record = {
                     "custom_id": custom_id,
                     "params": {
                         "model": config.model,
                         "max_tokens": config.max_output_tokens,
-                        "messages": [{"role": "user", "content": prompt}],
+                        "system": [
+                            {
+                                "type": "text",
+                                "text": parts.instructions,
+                                "cache_control": {"type": "ephemeral"},
+                            }
+                        ],
+                        "messages": [{"role": "user", "content": parts.request}],
                     },
                 }
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
         dump_json(manifest_path, manifest)
+
+    def complete(
+        self, instructions: str, request: str, model: str, max_tokens: int, schema: Optional[dict] = None
+    ) -> str:
+        body = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": instructions,
+            "messages": [{"role": "user", "content": request}],
+        }
+        response = requests.post(ANTHROPIC_MESSAGES_URL, headers=self.headers, json=body, timeout=600)
+        response.raise_for_status()
+        return extract_anthropic_output_text(response.json()) or ""
 
     def create_batch(self, request_path: Path, metadata: Optional[dict], completion_window: str) -> str:
         requests_payload = [
@@ -436,6 +530,7 @@ class AnthropicBatchProvider(BatchProvider):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         translations_by_hash: Dict[str, str] = {}
         malformed_groups: Dict[str, str] = {}
+        doubts_by_hash: Dict[str, str] = {}
         seen_groups: set[str] = set()
         output_text = output_bytes.decode("utf-8", errors="replace")
 
@@ -452,11 +547,13 @@ class AnthropicBatchProvider(BatchProvider):
                 continue
             message = result.get("message") or {}
             raw_output = extract_anthropic_output_text(message)
+            raw_output_for_doubts = raw_output
             parsed_group, issue = parse_translated_array(raw_output, manifest[custom_id])
             if issue is not None:
                 malformed_groups[custom_id] = issue
                 continue
             translations_by_hash.update(parsed_group)
+            doubts_by_hash.update(extract_doubts(raw_output_for_doubts, manifest[custom_id]))
 
         for custom_id in manifest:
             if custom_id not in seen_groups:
@@ -465,6 +562,7 @@ class AnthropicBatchProvider(BatchProvider):
         return ParsedBatchOutput(
             translations_by_hash=translations_by_hash,
             malformed_groups=malformed_groups,
+            doubts_by_hash=doubts_by_hash,
         )
 
 
@@ -521,24 +619,14 @@ class OllamaProvider(BatchProvider):
         manifest = build_manifest(groups)
         with request_path.open("w", encoding="utf-8") as handle:
             for custom_id, items in manifest.items():
-                prompt = build_translation_prompt(
-                    payload_texts=[item["core_text"] for item in items],
-                    payload_ids=[item["item_id"] for item in items],
-                    target_lang=config.target_lang,
-                    source_lang=config.source_lang,
-                    natural=config.natural,
-                    prompt_file=config.prompt_file,
-                    current_translations=[item.get("current_translation") for item in items],
-                    context_hints=[item.get("context_hint", "") for item in items],
-                    repair_mode=config.prompt_mode == "repair",
-                    review_mode=config.prompt_mode == "review",
-                    glossary=load_glossary(config.glossary_file),
-                )
+                parts = prompt_parts_for(items, config)
                 record = {
                     "custom_id": custom_id,
+                    "content_hash": group_content_hash(items),
                     "model": config.model,
                     "max_tokens": config.max_output_tokens,
-                    "prompt": prompt,
+                    "instructions": parts.instructions,
+                    "prompt": parts.request,
                 }
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
         dump_json(manifest_path, manifest)
@@ -556,12 +644,22 @@ class OllamaProvider(BatchProvider):
         if wanted not in names and model not in names:
             raise RuntimeError(f"Model '{model}' is not installed in Ollama. Run: ollama pull {model}")
 
-    def _chat(self, record: dict) -> str:
+    def complete(
+        self, instructions: str, request: str, model: str, max_tokens: int, schema: Optional[dict] = None
+    ) -> str:
+        self.check_server(model)
+        record = {"model": model, "max_tokens": max_tokens, "instructions": instructions, "prompt": request}
+        return self._chat(record, schema=schema)
+
+    def _chat(self, record: dict, schema: Optional[dict] = None) -> str:
         body = {
             "model": record["model"],
-            "messages": [{"role": "user", "content": record["prompt"]}],
+            "messages": (
+                [{"role": "system", "content": record["instructions"]}] if record.get("instructions") else []
+            )
+            + [{"role": "user", "content": record["prompt"]}],
             "stream": False,
-            "format": OLLAMA_RESPONSE_SCHEMA,
+            "format": schema or OLLAMA_RESPONSE_SCHEMA,
             "keep_alive": "30m",
             "options": {
                 "num_ctx": self.num_ctx,
@@ -592,11 +690,33 @@ class OllamaProvider(BatchProvider):
         return str(output_path)
 
     def _run_records(self, records: List[dict], output_path: Path) -> None:
+        """Run the requests that have no usable result yet.
+
+        A stored result is reused only if it belongs to the same source text
+        (content_hash). Results written before hashes existed are trusted, as
+        grouping is deterministic. Failed requests are retried.
+        """
+        expected_hash = {record["custom_id"]: record.get("content_hash") for record in records}
+        kept_lines: List[str] = []
         done: set[str] = set()
+        dropped = 0
         if output_path.exists():
             for line in output_path.read_text(encoding="utf-8").splitlines():
-                if line.strip():
-                    done.add(json.loads(line).get("custom_id"))
+                if not line.strip():
+                    continue
+                result = json.loads(line)
+                custom_id = result.get("custom_id")
+                stored_hash = result.get("content_hash")
+                if "error" in result or (
+                    stored_hash is not None and stored_hash != expected_hash.get(custom_id)
+                ):
+                    dropped += 1
+                    continue
+                kept_lines.append(line)
+                done.add(custom_id)
+            if dropped:
+                output_path.write_text("".join(f"{line}\n" for line in kept_lines), encoding="utf-8")
+                log(f"Ollama: discarded {dropped} stale or failed stored result(s).")
         todo = [record for record in records if record["custom_id"] not in done]
         if done and todo:
             log(f"Ollama: resuming, {len(done)} request(s) already done, {len(todo)} left.")
@@ -609,6 +729,7 @@ class OllamaProvider(BatchProvider):
                     result = {"custom_id": record["custom_id"], "content": content}
                 except requests.RequestException as error:
                     result = {"custom_id": record["custom_id"], "error": str(error)}
+                result["content_hash"] = record.get("content_hash")
                 handle.write(json.dumps(result, ensure_ascii=False) + "\n")
                 handle.flush()
                 elapsed = time.monotonic() - started
@@ -664,6 +785,7 @@ class OllamaProvider(BatchProvider):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         translations_by_hash: Dict[str, str] = {}
         malformed_groups: Dict[str, str] = {}
+        doubts_by_hash: Dict[str, str] = {}
         seen_groups: set[str] = set()
 
         for line in output_bytes.decode("utf-8", errors="replace").splitlines():
@@ -677,17 +799,23 @@ class OllamaProvider(BatchProvider):
             if record.get("error"):
                 malformed_groups[custom_id] = f"request failed: {record['error']}"
                 continue
-            parsed_group, issue = parse_translated_array(record.get("content"), manifest[custom_id])
+            raw_output_for_doubts = record.get("content")
+            parsed_group, issue = parse_translated_array(raw_output_for_doubts, manifest[custom_id])
             if issue is not None:
                 malformed_groups[custom_id] = issue
                 continue
             translations_by_hash.update(parsed_group)
+            doubts_by_hash.update(extract_doubts(raw_output_for_doubts, manifest[custom_id]))
 
         for custom_id in manifest:
             if custom_id not in seen_groups:
                 malformed_groups.setdefault(custom_id, "missing output record")
 
-        return ParsedBatchOutput(translations_by_hash=translations_by_hash, malformed_groups=malformed_groups)
+        return ParsedBatchOutput(
+            translations_by_hash=translations_by_hash,
+            malformed_groups=malformed_groups,
+            doubts_by_hash=doubts_by_hash,
+        )
 
 
 def create_provider(provider_name: str, api_key: str) -> BatchProvider:

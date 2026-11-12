@@ -37,8 +37,8 @@ class PromptingTests(unittest.TestCase):
             context_hints=["This paragraph explains a technical argument."],
         )
         self.assertIn("Repair mode:", prompt)
-        self.assertIn("Current translations to review:", prompt)
-        self.assertIn("Optional context hints:", prompt)
+        self.assertIn('"current_translation": "Traducción rara y rota."', prompt)
+        self.assertIn('"context": "This paragraph explains a technical argument."', prompt)
 
     def test_review_mode_includes_editorial_revision_guidance(self) -> None:
         prompt = build_translation_prompt(
@@ -51,7 +51,34 @@ class PromptingTests(unittest.TestCase):
             current_translations=["Una traducción aceptable pero mejorable."],
         )
         self.assertIn("Review mode:", prompt)
-        self.assertIn("keep the current translation if it is already strong", prompt)
+        self.assertIn("Keep it if it is already accurate and natural", prompt)
+        self.assertIn('"current_translation": "Una traducción aceptable pero mejorable."', prompt)
+
+    def test_prompt_parts_keep_stable_prefix_across_requests(self) -> None:
+        from translate_epub_ai.prompting import build_prompt_parts
+
+        first = build_prompt_parts(["One."], "es", "en", True, payload_ids=["a"])
+        second = build_prompt_parts(["Two.", "Three."], "es", "en", True, payload_ids=["b", "c"])
+        self.assertEqual(first.instructions, second.instructions)
+        self.assertNotIn("One.", first.instructions)
+        self.assertIn('"text": "One."', first.request)
+        self.assertIn("exactly 2 objects", second.request)
+        self.assertIn("Never translate titles of cited works", first.instructions)
+
+    def test_review_items_carry_previous_translation_and_notes(self) -> None:
+        prompt = build_translation_prompt(
+            payload_texts=["But this misses the point."],
+            payload_ids=["r1"],
+            target_lang="es",
+            source_lang="en",
+            natural=True,
+            review_mode=True,
+            current_translations=["Pero esto no da en el clavo."],
+            previous_translations=["Popper lo llamó el problema de la demarcación."],
+            review_notes=["starts with a reference to the previous paragraph"],
+        )
+        self.assertIn('"previous_translation": "Popper lo llamó el problema de la demarcación."', prompt)
+        self.assertIn('"review_notes": "starts with a reference to the previous paragraph"', prompt)
 
 
 if __name__ == "__main__":

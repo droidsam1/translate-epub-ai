@@ -7,7 +7,7 @@ from typing import List, Optional, Tuple
 from .cache import ProgressCache
 from .constants import HTML_EXTS, PACKAGE_EXTS
 from .models import PendingNode
-from .segments import build_context_hint, decode_into, iter_segments, parse_document
+from .segments import build_context_hint, decode_into, iter_segments, parse_document, section_kinds
 from .utils import log
 
 
@@ -50,7 +50,9 @@ def is_navigation_or_package(path: Path) -> bool:
     return as_posix.endswith("/nav.xhtml") or as_posix.endswith("/nav.html")
 
 
-def collect_pending_nodes(workdir: Path, cache: ProgressCache) -> Tuple[List[PendingNode], int, List[str]]:
+def collect_pending_nodes(
+    workdir: Path, cache: ProgressCache, skip_index: bool = False
+) -> Tuple[List[PendingNode], int, List[str]]:
     """Collect one pending item per paragraph-like segment (see segments.py)."""
     pending: List[PendingNode] = []
     cache_hits = 0
@@ -65,7 +67,10 @@ def collect_pending_nodes(workdir: Path, cache: ProgressCache) -> Tuple[List[Pen
 
         tree, _ = parse_document(file_path)
         segments = iter_segments(tree.getroot())
+        kinds = section_kinds(rel_path, segments)
         for index, segment in enumerate(segments):
+            if skip_index and kinds[index] == "index":
+                continue
             if cache.get(segment.encoded) is not None:
                 cache_hits += 1
                 continue
@@ -79,11 +84,35 @@ def collect_pending_nodes(workdir: Path, cache: ProgressCache) -> Tuple[List[Pen
                     rel_path=rel_path,
                     node_index=index,
                     core_text=segment.encoded,
-                    context_hint=build_context_hint(segments, index),
+                    context_hint=build_context_hint(segments, index, section_kind=kinds[index]),
                 )
             )
 
     return pending, cache_hits, skipped
+
+
+def collect_all_nodes(workdir: Path, skip_index: bool = False) -> List[PendingNode]:
+    """Every translatable segment of the book in reading order, cached or not."""
+    nodes: List[PendingNode] = []
+    for file_path in find_content_files(workdir):
+        if is_navigation_or_package(file_path):
+            continue
+        rel_path = file_path.relative_to(workdir).as_posix()
+        tree, _ = parse_document(file_path)
+        segments = iter_segments(tree.getroot())
+        kinds = section_kinds(rel_path, segments)
+        for index, segment in enumerate(segments):
+            if skip_index and kinds[index] == "index":
+                continue
+            nodes.append(
+                PendingNode(
+                    rel_path=rel_path,
+                    node_index=index,
+                    core_text=segment.encoded,
+                    context_hint=build_context_hint(segments, index, section_kind=kinds[index]),
+                )
+            )
+    return nodes
 
 
 def apply_translations(workdir: Path, cache: ProgressCache) -> int:

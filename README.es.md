@@ -100,13 +100,13 @@ python -m translate_epub_ai "book.epub" --to es
 Ejemplo indicando modelo:
 
 ```bash
-python -m translate_epub_ai "book.epub" --to es --model gpt-4.1-mini
+python -m translate_epub_ai "book.epub" --to es --model gpt-5.6-terra
 ```
 
 Ejemplo con Anthropic:
 
 ```bash
-python -m translate_epub_ai "book.epub" --provider anthropic --model claude-sonnet-4-20250514 --to es
+python -m translate_epub_ai "book.epub" --provider anthropic --model claude-sonnet-5-5 --to es
 ```
 
 ## Comandos útiles
@@ -213,6 +213,54 @@ Notas:
 - Para español, el prompt añade reglas de estilo concretas (comillas « », pasiva refleja, no omitir matices, evitar calcos) y las comillas se normalizan a « » automáticamente.
 - Variables de entorno opcionales: `OLLAMA_HOST` (por defecto `http://localhost:11434`), `OLLAMA_NUM_CTX` (por defecto `16384`), `OLLAMA_TEMPERATURE` (por defecto `0.3`).
 
+## Glosarios (para cualquier libro)
+
+Un glosario mantiene coherentes los términos clave en todo el libro.
+
+```bash
+# 1. Genera un glosario inicial para el libro y para, para que lo revises
+python -m translate_epub_ai "libro.epub" --provider ollama --to es --glossary-only
+# 2. Edita libro.glossary.es.txt y traduce con él
+python -m translate_epub_ai "libro.epub" --provider ollama --to es --auto-glossary
+```
+
+`--auto-glossary` busca términos candidatos en local (palabras que el autor enfatiza, nombres de conceptos con mayúscula, expresiones recurrentes) y pregunta al modelo cuáles son términos de verdad y cómo traducirlos. Si el archivo ya existe se reutiliza, así que tus cambios se conservan.
+
+Formato, una entrada por línea (`#` inicia un comentario):
+
+```text
+hard to vary = difícil de variar
+reach = alcance | the range of situations an idea applies to, not "reach out"
+```
+
+Lo que va tras `|` indica al modelo en qué sentido se aplica la traducción, para palabras que también tienen un uso corriente. Solo se envían los términos que aparecen en cada petición. `glossaries/the-beginning-of-infinity.es.txt` es un ejemplo hecho a mano.
+
+## Revisión: dónde están los puntos débiles
+
+Tras la primera pasada, un comprobador local (sin llamar al modelo) busca puntos débiles y solo se revisan esos párrafos (`--review-scope flagged`, por defecto). Marca:
+
+- marcadores de formato que no coinciden con el original;
+- párrafos mucho más cortos o largos de lo habitual en este libro (posible omisión o paráfrasis);
+- palabras idénticas al original (fragmentos sin traducir);
+- números que faltan o cambian; un número de frases muy distinto (contenido perdido o fusionado);
+- palabras repetidas, comillas o paréntesis desparejados, términos del glosario no usados;
+- párrafos que empiezan remitiendo al anterior («This…», «But…», «So…»): las costuras donde se puede romper la coherencia;
+- párrafos en los que el propio modelo traductor declaró una duda.
+
+El revisor recibe el original, la traducción actual, la traducción ya aprobada del párrafo anterior (para comprobar que se lee como continuación) y los motivos del aviso. Usa `--review-scope all` para revisar todo, `--review-passes 0` para saltarte la revisión y `--review-existing` para revisar un libro ya traducido.
+
+## Citas, bibliografía e índice
+
+- Los títulos de obras citadas y los nombres de personas nunca se traducen.
+- Se detectan las secciones de bibliografía y lecturas recomendadas (por nombre de archivo o título, en varios idiomas): autores, títulos, editoriales y fechas se quedan como en el original.
+- Las entradas del índice alfabético se traducen como términos de índice, conservando nombres y números. `--skip-index` deja el índice sin traducir para ahorrar tiempo.
+
+## Proveedores por API
+
+- Por defecto: `gpt-5.6-terra` (OpenAI) y `claude-sonnet-5-5` (Anthropic). Opciones más baratas: `--model gpt-5.6-luna` o `--model claude-haiku-5-5`.
+- Caché de prompt: las instrucciones fijas van primero e idénticas en cada petición (`prompt_cache_key` en OpenAI, `cache_control` en Anthropic), así que a partir de la primera se cobran a precio de caché. Ollama reutiliza ese mismo prefijo para no volver a leerlo.
+- En los modelos GPT-5.6 de OpenAI se desactiva el razonamiento oculto (`--reasoning-effort none`): traducir no lo necesita y se cobra como salida. Usa `--reasoning-effort low` (o `default`) para cambiarlo.
+
 ## Cómo se envía el texto al modelo
 
 Cada párrafo o título se traduce como una unidad. El formato interno se sustituye por marcadores numerados para que el modelo vea la frase entera:
@@ -236,6 +284,8 @@ python -m unittest discover -s tests -v
 src/translate_epub_ai/cli.py
 src/translate_epub_ai/epub.py
 src/translate_epub_ai/segments.py
+src/translate_epub_ai/quality.py
+src/translate_epub_ai/glossary_builder.py
 src/translate_epub_ai/batch_providers.py
 src/translate_epub_ai/prompting.py
 tests/
@@ -246,7 +296,9 @@ tests/
 - `cli.py`: punto de entrada por línea de comandos
 - `epub.py`: extrae y reconstruye archivos EPUB
 - `batch_providers.py`: lógica de OpenAI y Anthropic (APIs batch) y de Ollama (local)
-- `segments.py`: divide los capítulos en párrafos y convierte el formato interno en marcadores y de vuelta
+- `segments.py`: divide los capítulos en párrafos, convierte el formato interno en marcadores y de vuelta, y detecta bibliografía e índice
+- `quality.py`: detección local de puntos débiles que decide qué párrafos se revisan
+- `glossary_builder.py`: extracción de candidatos y generación de `--auto-glossary`
 - `prompting.py`: genera el prompt de traducción
 - `tests/`: ayuda a que los cambios sean más seguros
 

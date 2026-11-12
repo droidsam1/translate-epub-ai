@@ -12,6 +12,8 @@ class PendingNode:
     core_text: str
     current_translation: Optional[str] = None
     context_hint: str = ""
+    previous_translation: Optional[str] = None
+    review_notes: str = ""
 
 
 @dataclass(frozen=True)
@@ -39,3 +41,9 @@ class TranslationConfig:
     prepare_only: bool
     resume_batch_id: Optional[str]
     glossary_file: Optional[Path] = None
+    reasoning_effort: Optional[str] = None
+    review_scope: str = "flagged"
+    skip_index: bool = False
+    review_existing: bool = False
+    auto_glossary: bool = False
+    glossary_only: bool = False

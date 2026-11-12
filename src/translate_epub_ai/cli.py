@@ -1,6 +1,7 @@
 """CLI entry point for the EPUB translator."""
 
 import argparse
+import dataclasses
 import json
 import os
 import tempfile
@@ -8,10 +9,13 @@ from pathlib import Path
 
 from .batch_providers import build_grouped_requests, create_provider
 from .cache import ProgressCache
-from .epub import apply_translations, collect_pending_nodes, extract_epub, rebuild_epub
+from .epub import apply_translations, collect_all_nodes, collect_pending_nodes, extract_epub, rebuild_epub
+from .glossary_builder import build_glossary, default_glossary_path
+from .prompting import load_glossary
 from .models import PendingNode, TranslationConfig
 from .utils import log, stable_text_hash
 from .workflow import (
+    build_review_candidates,
     build_round_config,
     cleanup_artifacts,
     execute_batch_round,
@@ -73,6 +77,38 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Automatic selective repair passes after the main translation batch",
     )
+    parser.add_argument(
+        "--reasoning-effort",
+        default=None,
+        help='OpenAI reasoning effort (none, low, medium...). Defaults to "none" for gpt-5.6 models; '
+        'use "default" to let the API decide',
+    )
+    parser.add_argument(
+        "--review-scope",
+        choices=["flagged", "all"],
+        default="flagged",
+        help="Review only paragraphs flagged as weak (default) or every paragraph",
+    )
+    parser.add_argument(
+        "--review-existing",
+        action="store_true",
+        help="Run the review pass over an already translated book (uses the progress cache)",
+    )
+    parser.add_argument(
+        "--auto-glossary",
+        action="store_true",
+        help="Build a glossary for this book with the model (if it does not exist yet) and use it",
+    )
+    parser.add_argument(
+        "--glossary-only",
+        action="store_true",
+        help="Only build the glossary (implies --auto-glossary) and stop, so you can review it first",
+    )
+    parser.add_argument(
+        "--skip-index",
+        action="store_true",
+        help="Leave the book's alphabetical index untranslated (saves time on long indexes)",
+    )
     parser.add_argument("--literal", action="store_true", help="Prefer a more literal translation style")
     parser.add_argument("--natural", action="store_true", help="Prefer a more literary translation style (default)")
     parser.add_argument("--completion-window", default="24h", choices=["24h"])
@@ -101,8 +137,8 @@ def parse_args() -> argparse.Namespace:
 
 
 DEFAULT_MODELS = {
-    "openai": "gpt-4.1-mini",
-    "anthropic": "claude-sonnet-4-20250514",
+    "openai": "gpt-5.6-terra",
+    "anthropic": "claude-sonnet-5-5",
     "ollama": "gemma4:26b-a4b-it-qat",
 }
 # Local models do better with smaller requests: shorter prompts, less JSON to
@@ -144,6 +180,12 @@ def build_config(args: argparse.Namespace) -> TranslationConfig:
         prepare_only=args.prepare_only,
         resume_batch_id=args.resume_batch_id,
         glossary_file=args.glossary,
+        reasoning_effort=args.reasoning_effort,
+        review_scope=args.review_scope,
+        skip_index=args.skip_index,
+        review_existing=args.review_existing,
+        auto_glossary=args.auto_glossary or args.glossary_only,
+        glossary_only=args.glossary_only,
     )
 
 
@@ -154,7 +196,7 @@ def validate_config(config: TranslationConfig) -> None:
         raise ValueError("Input file must be an .epub")
     if config.prompt_file is not None and not config.prompt_file.exists():
         raise FileNotFoundError(f"Prompt template not found: {config.prompt_file}")
-    if config.glossary_file is not None and not config.glossary_file.exists():
+    if config.glossary_file is not None and not config.glossary_file.exists() and not config.auto_glossary:
         raise FileNotFoundError(f"Glossary not found: {config.glossary_file}")
     if config.repair_file is not None and not config.repair_file.exists():
         raise FileNotFoundError(f"Repair file not found: {config.repair_file}")
@@ -169,7 +211,7 @@ def load_pending_nodes(workdir: Path, config: TranslationConfig, cache: Progress
         log(f"Existing cached translations available for review: {cache_hits}")
         return pending
 
-    pending, cache_hits, skipped = collect_pending_nodes(workdir, cache)
+    pending, cache_hits, skipped = collect_pending_nodes(workdir, cache, skip_index=config.skip_index)
     log(f"Pending untranslated text nodes: {len(pending)}")
     log(f"Immediate cache hits: {cache_hits}")
     log(f"Skipped navigation/package files: {len(skipped)}")
@@ -178,23 +220,10 @@ def load_pending_nodes(workdir: Path, config: TranslationConfig, cache: Progress
     return pending
 
 
-def build_review_candidates(pending: list[PendingNode], cache: ProgressCache) -> list[PendingNode]:
-    return [
-        PendingNode(
-            rel_path=item.rel_path,
-            node_index=item.node_index,
-            core_text=item.core_text,
-            current_translation=cache.get(item.core_text),
-            context_hint=f"Nearby file context: {item.rel_path}",
-        )
-        for item in pending
-        if cache.get(item.core_text)
-    ]
-
-
 def run_follow_up_rounds(
     *,
     pending: list[PendingNode],
+    all_nodes: list[PendingNode],
     base_config: TranslationConfig,
     cache: ProgressCache,
     provider,
@@ -205,11 +234,23 @@ def run_follow_up_rounds(
     artifacts: list[Path] = []
 
     if base_config.repair_file is None and base_config.review_passes > 0:
-        review_candidates = build_review_candidates(pending, cache)
+        glossary = load_glossary(base_config.glossary_file)
         for round_number in range(1, base_config.review_passes + 1):
+            review_candidates = build_review_candidates(
+                all_nodes,
+                cache,
+                scope=base_config.review_scope,
+                glossary=glossary,
+                source_lang=base_config.source_lang or "en",
+            )
             if not review_candidates:
+                log("Review: no weak spots detected.")
                 break
-            log(f"Review pass {round_number}: reviewing {len(review_candidates)} translated fragments.")
+            total = sum(1 for node in all_nodes if cache.get(node.core_text))
+            log(
+                f"Review pass {round_number}: reviewing {len(review_candidates)} of {total} paragraphs "
+                f"(scope: {base_config.review_scope})."
+            )
             review_request_path = make_round_artifact_path(base_config.jsonl_file, f"review-{round_number}")
             review_manifest_path = make_round_artifact_path(base_config.manifest_file, f"review-{round_number}")
             review_config = build_round_config(
@@ -306,48 +347,78 @@ def run(config: TranslationConfig) -> int:
         log(f"Extracting EPUB: {config.input_epub}")
         extract_epub(config.input_epub, workdir)
 
+        if config.auto_glossary:
+            glossary_path = config.glossary_file or default_glossary_path(config.input_epub, config.target_lang)
+            if glossary_path.exists():
+                log(f"Using existing glossary: {glossary_path}")
+            elif provider is None:
+                raise RuntimeError("Building a glossary needs a provider (API key or Ollama).")
+            else:
+                build_glossary(
+                    provider,
+                    collect_all_nodes(workdir, skip_index=True),
+                    model=config.model,
+                    source_lang=config.source_lang,
+                    target_lang=config.target_lang,
+                    output_path=glossary_path,
+                    max_output_tokens=config.max_output_tokens,
+                )
+            config = dataclasses.replace(config, glossary_file=glossary_path)
+            if config.glossary_only:
+                log("Glossary ready. Review it, then run again without --glossary-only to translate.")
+                return 0
+
         pending = load_pending_nodes(workdir, config, cache)
-        if not pending:
+        all_nodes = pending if config.repair_file else collect_all_nodes(workdir, config.skip_index)
+        artifacts: list[Path] = []
+        if not pending and not config.review_existing:
             translated_nodes = apply_translations(workdir, cache)
             rebuild_epub(workdir, config.output_epub)
             log(f"Done. Output: {config.output_epub}")
             log(f"Translated nodes applied from cache: {translated_nodes}")
             return 0
 
-        initial_groups = build_grouped_requests(
-            pending,
-            config.max_items_per_request,
-            config.max_chars_per_request,
-        )
-        batch, stored, artifacts = execute_batch_round(
-            pending=pending,
-            config=config,
-            cache=cache,
-            provider=provider,
-            artifact_provider=artifact_provider,
-            request_path=config.jsonl_file,
-            manifest_path=config.manifest_file,
-            groups=initial_groups,
-            resume_batch_id=config.resume_batch_id,
-            mode_label=config.prompt_mode,
-        )
+        if pending:
+            initial_groups = build_grouped_requests(
+                pending,
+                config.max_items_per_request,
+                config.max_chars_per_request,
+            )
+            batch, stored, artifacts = execute_batch_round(
+                pending=pending,
+                config=config,
+                cache=cache,
+                provider=provider,
+                artifact_provider=artifact_provider,
+                request_path=config.jsonl_file,
+                manifest_path=config.manifest_file,
+                groups=initial_groups,
+                resume_batch_id=config.resume_batch_id,
+                mode_label=config.prompt_mode,
+            )
 
-        if config.prepare_only:
-            log("Prepare-only mode enabled. No upload or batch creation performed.")
-            return 0
+            if config.prepare_only:
+                log("Prepare-only mode enabled. No upload or batch creation performed.")
+                return 0
 
-        assert provider is not None
-        if stored != len(pending):
-            log("Batch results were only partially usable. Cached successful translations so they will not be requested again.")
-            log(json.dumps(batch, ensure_ascii=False, indent=2))
-            return 2
-        if not provider.is_success_status(batch):
-            log("Batch did not complete fully successfully, but parsed results were cached.")
-            log(json.dumps(batch, ensure_ascii=False, indent=2))
-            return 2
+            assert provider is not None
+            if stored != len(pending):
+                log("Batch results were only partially usable. Cached successful translations so they will not be requested again.")
+                log(json.dumps(batch, ensure_ascii=False, indent=2))
+                return 2
+            if not provider.is_success_status(batch):
+                log("Batch did not complete fully successfully, but parsed results were cached.")
+                log(json.dumps(batch, ensure_ascii=False, indent=2))
+                return 2
+        else:
+            log("Everything is already translated: reviewing the existing translation.")
+            if config.prepare_only or provider is None:
+                log("Nothing to send in prepare-only mode.")
+                return 0
 
         review_applied, auto_repair_applied, follow_up_artifacts = run_follow_up_rounds(
             pending=pending,
+            all_nodes=all_nodes,
             base_config=config,
             cache=cache,
             provider=provider,

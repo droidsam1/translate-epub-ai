@@ -2,6 +2,7 @@
 
 import json
 import re
+from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -23,13 +24,76 @@ Spanish style rules (follow them strictly):
 """
 
 
+CITATION_RULES = """
+Cited works and references:
+- Never translate titles of cited works (books, articles, papers, journals, films) or people's names. Keep them exactly as in the source, in running text and in notes.
+- Items whose context says kind=index are entries of the book's alphabetical index: translate the terms concisely as they would appear in a translated index, keep people's names and titles unchanged, and keep the numbers, commas and other punctuation exactly as they are.
+- Items whose context says kind=reference are bibliography or reference-list entries: keep authors, titles, journal names, publishers, places, volume/page numbers and dates exactly as in the source. Translate only generic words such as "ed.", "trans.", "Chapter", "and", "in" and any annotation written in prose.
+"""
+
+QUALITY_CONTROL = """
+Quality control:
+- Before finalizing each item, silently check that it is coherent, natural, idiomatic, and consistent with the likely surrounding document.
+- Fix broken phrasing, unnatural calques, punctuation issues, register mismatches, and formatting glitches before returning the final JSON.
+- If a literal translation sounds wrong in the target language, rewrite it so it sounds native while preserving meaning and tone.
+- Keep each item aligned with the surrounding narrative or argument, even when the local sentence is ambiguous.
+- Never merge one item's content into another item, and never import text from neighboring sections unless it is already present in the source item.
+- Treat each item's id as binding: return exactly one translation for that same id, with no extra ids and no missing ids.
+- If you are genuinely unsure about an item (ambiguous term, wordplay, idiom, a sentence you could not render naturally), add a short "doubt" field to that object explaining why. Leave it out otherwise.
+"""
+
+REVIEW_MODE = """
+Review mode:
+- You are reviewing existing translations against the source text, as a demanding copy editor of the target language.
+- Each item has "current_translation". Keep it if it is already accurate and natural; otherwise return an improved version.
+- Compare against the source and fix: omitted or added words, wrong prepositions, literal passives, calques, wrong terminology, misplaced emphasis markers, wrong quotation marks and changed punctuation.
+- "previous_translation", when present, is the already-approved translation of the paragraph right before this one. Make the item read as a natural continuation of it: pronouns, connectors, tense, terminology and tone must agree.
+- "review_notes", when present, explains why the item was flagged. Check those points first, but the flag can be a false alarm: do not change a good translation just because it was flagged.
+- Return the final translation array only, without comments.
+"""
+
+REPAIR_MODE = """
+Repair mode:
+- You are revising suspicious or low-quality translated items, not retranslating a whole chapter.
+- Each item may have "current_translation". Correct what needs improvement and return the full corrected array in order.
+- Prioritize fixing broken formatting or markers, lost meaning, untranslated text, awkward wording and inconsistencies with the rest of the document.
+"""
+
+
+@dataclass(frozen=True)
+class PromptParts:
+    """A prompt split into a stable prefix and the per-request part.
+
+    `instructions` is identical for every request of a run (same mode and
+    languages), so providers can cache it (Anthropic cache_control, OpenAI
+    automatic prefix caching, Ollama KV-cache reuse). `request` holds the
+    items and anything that changes per request.
+    """
+
+    instructions: str
+    request: str
+
+    @property
+    def full(self) -> str:
+        return f"{self.instructions.rstrip()}\n\n{self.request.lstrip()}"
+
+
 def load_prompt_template(prompt_file: Optional[Path]) -> str:
     if prompt_file is not None:
         return prompt_file.read_text(encoding="utf-8")
     return resources.files("translate_epub_ai.prompts").joinpath("default_prompt.txt").read_text(encoding="utf-8")
 
 
-def build_translation_prompt(
+def split_template(template: str) -> tuple[str, str]:
+    """Split at the first line that depends on the request (item count or payload)."""
+    lines = template.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if "{item_count}" in line or "{payload_json}" in line:
+            return "".join(lines[:index]), "".join(lines[index:])
+    return template, "{payload_json}"
+
+
+def build_prompt_parts(
     payload_texts: List[str],
     target_lang: str,
     source_lang: Optional[str],
@@ -41,7 +105,9 @@ def build_translation_prompt(
     repair_mode: bool = False,
     review_mode: bool = False,
     glossary: Optional[Dict[str, str]] = None,
-) -> str:
+    previous_translations: Optional[List[Optional[str]]] = None,
+    review_notes: Optional[List[str]] = None,
+) -> PromptParts:
     if target_lang.lower() == "es":
         locale_instruction = "natural European Spanish (Spanish as used in Spain)"
         quote_instruction = 'Use proper Spanish book-style quotation marks ("\u00ab \u00bb") when appropriate.'
@@ -55,91 +121,72 @@ def build_translation_prompt(
         else "The translation should remain precise and faithful, but still read as fluent, idiomatic prose in the target language."
     )
 
-    template = load_prompt_template(prompt_file)
+    def optional(values: Optional[List], index: int):
+        if values and index < len(values):
+            return values[index]
+        return None
+
     prompt_items = []
     for index, text in enumerate(payload_texts):
         item = {
             "id": payload_ids[index] if payload_ids else f"item-{index + 1}",
             "text": text,
         }
-        if context_hints and index < len(context_hints) and context_hints[index]:
+        if optional(context_hints, index):
             item["context"] = context_hints[index]
+        if (review_mode or repair_mode) and optional(current_translations, index):
+            item["current_translation"] = current_translations[index]
+        if review_mode and optional(previous_translations, index):
+            item["previous_translation"] = previous_translations[index]
+        if (review_mode or repair_mode) and optional(review_notes, index):
+            item["review_notes"] = review_notes[index]
         prompt_items.append(item)
 
-    prompt = template.format(
-        source_language_clause=f" from {source_lang}" if source_lang else "",
-        target_language_name=locale_instruction,
-        style_instruction=style_instruction,
-        quote_instruction=f"- {quote_instruction}" if quote_instruction else "",
-        item_count=len(payload_texts),
-        payload_json=json.dumps(prompt_items, ensure_ascii=False),
-    )
-    if target_lang.lower() == "es":
-        prompt += "\n" + SPANISH_STYLE_RULES
+    fields = {
+        "source_language_clause": f" from {source_lang}" if source_lang else "",
+        "target_language_name": locale_instruction,
+        "style_instruction": style_instruction,
+        "quote_instruction": f"- {quote_instruction}" if quote_instruction else "",
+        "item_count": len(payload_texts),
+        "payload_json": json.dumps(prompt_items, ensure_ascii=False),
+    }
+    static_template, request_template = split_template(load_prompt_template(prompt_file))
 
+    instructions = static_template.format(**fields).rstrip() + "\n" + CITATION_RULES
+    if target_lang.lower() == "es":
+        instructions += SPANISH_STYLE_RULES
+    instructions += QUALITY_CONTROL
+    if review_mode:
+        instructions += REVIEW_MODE
+    if repair_mode:
+        instructions += REPAIR_MODE
+
+    request = request_template.format(**fields)
     relevant_terms = select_glossary_terms(glossary, payload_texts)
     if relevant_terms:
-        prompt += "\nMandatory terminology (use these renderings, inflected as needed, whenever the term is used in this sense):\n"
+        request += (
+            "\n\nMandatory terminology (use these renderings, inflected as needed, "
+            "whenever the term is used in this sense):\n"
+        )
         for source_term, target_term in relevant_terms.items():
-            prompt += f"- {source_term} -> {target_term}\n"
+            request += f"- {source_term} -> {target_term}\n"
 
-    prompt += (
-        "\n\nQuality control:\n"
-        "- Before finalizing each item, silently check that it is coherent, natural, idiomatic, and consistent with the likely surrounding document.\n"
-        "- Fix broken phrasing, unnatural calques, punctuation issues, register mismatches, and formatting glitches before returning the final JSON.\n"
-        "- If a literal translation sounds wrong in the target language, rewrite it so it sounds native while preserving meaning and tone.\n"
-        "- Keep each item aligned with the surrounding narrative or argument, even when the local sentence is ambiguous.\n"
-        "- Never merge one item's content into another item, and never import text from neighboring sections unless it is already present in the source item.\n"
-        "- Treat each item's id as binding: return exactly one translation for that same id, with no extra ids and no missing ids.\n"
-    )
+    return PromptParts(instructions=instructions, request=request)
 
-    if review_mode:
-        prompt += (
-            "\nReview mode:\n"
-            "- You are reviewing an existing translation against the source text.\n"
-            "- For each item, keep the current translation if it is already strong, natural, and accurate.\n"
-            "- Revise it only when needed to improve fluency, precision, coherence, formatting, tone, or idiomatic quality.\n"
-            "- Return the final polished translation array only, not comments or explanations.\n"
-            "- Act as a demanding Spanish copy editor. For every item, compare against the source and fix:\n"
-            "  omitted or added words, wrong prepositions, literal passives, calques, wrong terminology,\n"
-            "  misplaced emphasis markers, non-Spanish quotation marks, and changed punctuation.\n"
-        )
-        if current_translations:
-            prompt += "\nCurrent translations to review:\n"
-            for index, current in enumerate(current_translations, start=1):
-                if current:
-                    item_id = payload_ids[index - 1] if payload_ids else f"item-{index}"
-                    prompt += f"- {item_id}: {json.dumps(current, ensure_ascii=False)}\n"
 
-    if repair_mode:
-        prompt += (
-            "\nRepair mode:\n"
-            "- You are revising only suspicious or low-quality translated items, not retranslating a whole chapter.\n"
-            "- Correct only the items that need improvement, but return the full final corrected array in order.\n"
-            "- Prioritize fixing broken formatting, awkward wording, lost meaning, unnatural phrasing, and inconsistencies with the rest of the document.\n"
-        )
-        if current_translations:
-            prompt += "\nCurrent translations to review:\n"
-            for index, current in enumerate(current_translations, start=1):
-                if current:
-                    item_id = payload_ids[index - 1] if payload_ids else f"item-{index}"
-                    prompt += f"- {item_id}: {json.dumps(current, ensure_ascii=False)}\n"
-        if context_hints:
-            visible_hints = [hint for hint in context_hints if hint]
-            if visible_hints:
-                prompt += "\nOptional context hints:\n"
-                for index, hint in enumerate(context_hints, start=1):
-                    if hint:
-                        item_id = payload_ids[index - 1] if payload_ids else f"item-{index}"
-                        prompt += f"- {item_id}: {json.dumps(hint, ensure_ascii=False)}\n"
-
-    return prompt
+def build_translation_prompt(*args, **kwargs) -> str:
+    """Single-string prompt (instructions followed by the request)."""
+    return build_prompt_parts(*args, **kwargs).full
 
 
 def load_glossary(path: Optional[Path]) -> Dict[str, str]:
-    """Read a glossary file with one "source term = translation" per line.
+    """Read a glossary file.
 
-    Blank lines and lines starting with # are ignored.
+    One entry per line: ``source term = translation`` or, for words that
+    also have an everyday meaning, ``source term = translation | when it
+    means ...``. The note is shown to the model so it only applies the
+    rendering in that sense. Blank lines and lines starting with # are
+    ignored.
     """
     if path is None:
         return {}
@@ -148,9 +195,10 @@ def load_glossary(path: Optional[Path]) -> Dict[str, str]:
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
-        source_term, target_term = (part.strip() for part in line.split("=", 1))
+        source_term, target_part = (part.strip() for part in line.split("=", 1))
+        target_term, _, note = (part.strip() for part in target_part.partition("|"))
         if source_term and target_term:
-            glossary[source_term] = target_term
+            glossary[source_term] = f"{target_term} [only when: {note}]" if note else target_term
     return glossary
 
 

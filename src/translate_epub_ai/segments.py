@@ -304,11 +304,57 @@ def _tokenize(text: str) -> List[Tuple[str, str]]:
     return tokens
 
 
-def build_context_hint(segments: List[Segment], index: int, limit: int = 240) -> str:
+REFERENCE_FILE_RE = re.compile(
+    r"(biblio|references?|further[-_ ]?reading|works[-_ ]?cited|sources|citations?)", re.IGNORECASE
+)
+INDEX_FILE_RE = re.compile(r"(^|[/_-])index\d*\.x?html?$", re.IGNORECASE)
+REFERENCE_HEADINGS = {
+    "bibliography", "selected bibliography", "references", "further reading", "works cited",
+    "sources", "suggested reading", "recommended reading",
+    "bibliografía", "referencias", "lecturas recomendadas", "obras citadas", "fuentes",
+    "bibliographie", "références", "literatur", "literaturverzeichnis", "bibliografia",
+}
+INDEX_HEADINGS = {"index", "índice analítico", "índice alfabético", "register", "indice"}
+
+
+def section_kinds(rel_path: str, segments: List[Segment]) -> List[str]:
+    """Label each segment as "reference", "index" or "" (normal text).
+
+    Uses the file name and the section headings, so it works for any book:
+    a "Bibliography" heading switches to reference mode until the next
+    heading that is not a reference heading.
+    """
+    file_name = rel_path.rsplit("/", 1)[-1]
+    file_kind = ""
+    if INDEX_FILE_RE.search(file_name):
+        file_kind = "index"
+    elif REFERENCE_FILE_RE.search(file_name):
+        file_kind = "reference"
+
+    kinds: List[str] = []
+    current = file_kind
+    for segment in segments:
+        if segment.kind == "heading":
+            heading = segment.readable.strip().rstrip(":").lower()
+            if heading in REFERENCE_HEADINGS:
+                current = "reference"
+            elif heading in INDEX_HEADINGS:
+                current = "index"
+            elif not file_kind:
+                current = ""
+            kinds.append("")  # headings are always translated normally
+            continue
+        kinds.append(current)
+    return kinds
+
+
+def build_context_hint(
+    segments: List[Segment], index: int, limit: int = 240, section_kind: str = ""
+) -> str:
     def snippet(text: str) -> str:
         return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
-    pieces = [f"kind={segments[index].kind}"]
+    pieces = [f"kind={section_kind or segments[index].kind}"]
     if index > 0:
         pieces.append(f'prev="{snippet(segments[index - 1].readable)}"')
     if index + 1 < len(segments):

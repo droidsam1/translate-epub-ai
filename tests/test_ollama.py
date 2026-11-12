@@ -34,7 +34,7 @@ class FakeOllama(BaseHTTPRequestHandler):
         length = int(self.headers["Content-Length"])
         request = json.loads(self.rfile.read(length))
         FakeOllama.requests_seen.append(request)
-        prompt = request["messages"][0]["content"]
+        prompt = request["messages"][-1]["content"]
         ids = sorted(set(part.split('"')[0] for part in prompt.split('"id": "')[1:]))
         answer = [{"id": item_id, "translation": f"ES {item_id}"} for item_id in ids]
         self._send({"message": {"content": json.dumps(answer)}})
@@ -79,10 +79,50 @@ class OllamaProviderTests(unittest.TestCase):
             sent = FakeOllama.requests_seen[0]
             self.assertFalse(sent["stream"])
             self.assertEqual("array", sent["format"]["type"])
+            self.assertEqual("system", sent["messages"][0]["role"])
+            self.assertIn("Quality control", sent["messages"][0]["content"])
+            self.assertNotIn('"text": "Hello"', sent["messages"][0]["content"])
 
             # Resuming does not resend finished requests.
             provider.wait_for_batch(batch_id, 0)
             self.assertEqual(1, len(FakeOllama.requests_seen))
+
+    def test_resume_discards_results_for_different_source_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config = build_config(
+                parse_args_for_test(["book.epub", "--provider", "ollama", "--model", "test-model"])
+            )
+            provider = OllamaProvider(host=self.host)
+            request_path = tmp_path / "book.batch.jsonl"
+            manifest_path = tmp_path / "book.manifest.json"
+            output_path = request_path.with_suffix(".output.jsonl")
+
+            provider.build_request_artifact(
+                request_path, manifest_path, [[PendingNode("a.xhtml", 0, "Hello")]], config
+            )
+            provider.create_batch(request_path, None, "24h")
+            self.assertEqual(1, len(FakeOllama.requests_seen))
+
+            # Same group id, different text: stored result must not be reused.
+            provider.build_request_artifact(
+                request_path, manifest_path, [[PendingNode("a.xhtml", 0, "Goodbye")]], config
+            )
+            provider.create_batch(request_path, None, "24h")
+            self.assertEqual(2, len(FakeOllama.requests_seen))
+            self.assertEqual(1, len(output_path.read_text(encoding="utf-8").splitlines()))
+
+            # Legacy results without a hash, and failed results.
+            output_path.write_text(
+                json.dumps({"custom_id": "group_000001", "content": "[]"}) + "\n", encoding="utf-8"
+            )
+            provider.create_batch(request_path, None, "24h")
+            self.assertEqual(2, len(FakeOllama.requests_seen))
+            output_path.write_text(
+                json.dumps({"custom_id": "group_000001", "error": "boom"}) + "\n", encoding="utf-8"
+            )
+            provider.create_batch(request_path, None, "24h")
+            self.assertEqual(3, len(FakeOllama.requests_seen))
 
 
 if __name__ == "__main__":

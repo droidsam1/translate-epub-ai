@@ -1,16 +1,19 @@
-# Glossary for David Deutsch, "The Beginning of Infinity" (English -> Spanish).
-# One "source term = translation" per line. Only terms that appear in a
-# request are sent to the model. Edit freely.
+# Example glossary for David Deutsch, "The Beginning of Infinity" (English -> Spanish).
+#
+# Format: one entry per line
+#   source term = translation
+#   source term = translation | when it means ...   (for words that also have an everyday sense)
+# Only the terms that appear in each request are sent to the model.
+# For other books, generate a starting glossary with --auto-glossary and edit it.
 
-The Beginning of Infinity = El comienzo del infinito
-beginning of infinity = comienzo del infinito
+beginning of infinity = comienzo del infinito | Deutsch's concept, not the book title
 good explanation = buena explicación
 good explanations = buenas explicaciones
 bad explanation = mala explicación
 bad explanations = malas explicaciones
 hard to vary = difícil de variar
 easy to vary = fácil de variar
-reach = alcance
+reach = alcance | the range of situations an idea or explanation applies to, not "reach out" or "arrive at"
 fallibilism = falibilismo
 fallibilist = falibilista
 justificationism = justificacionismo
@@ -18,20 +21,18 @@ justified, true belief = creencia verdadera justificada
 empiricism = empirismo
 inductivism = inductivismo
 instrumentalism = instrumentalismo
-conjecture = conjetura
-conjectures = conjeturas
 rule of thumb = regla práctica
 rules of thumb = reglas prácticas
 error-correction = corrección de errores
 knowledge-creation = creación de conocimiento
 Principle of Mediocrity = Principio de Mediocridad
 Spaceship Earth = la nave espacial Tierra
-parochialism = provincianismo
-parochial = provinciano
+parochialism = provincianismo | the philosophical error of mistaking local appearances for universal truths
+parochial = provinciano | in the sense of parochialism above
 universality = universalidad
 jump to universality = salto a la universalidad
 universal constructor = constructor universal
-emergence = emergencia
+emergence = emergencia | the scientific concept of emergent phenomena, not an emergency
 emergent = emergente
 reductionism = reduccionismo
 holism = holismo
@@ -44,36 +45,33 @@ anti-rational meme = meme antirracional
 anti-rational memes = memes antirracionales
 rational meme = meme racional
 rational memes = memes racionales
-the Enlightenment = la Ilustración
+the Enlightenment = la Ilustración | the historical period
 mini-enlightenment = miniilustración
 Infinity Hotel = Hotel Infinito
 anthropic = antrópico
-fine-tuning = ajuste fino
+fine-tuning = ajuste fino | of physical constants
 multiverse = multiverso
 fungibility = fungibilidad
 fungible = fungible
 wave of differentiation = onda de diferenciación
-entanglement = entrelazamiento
-entangled = entrelazado
-interference = interferencia
+entanglement = entrelazamiento | quantum physics
+entangled = entrelazado | quantum physics
+interference = interferencia | quantum physics
 apportionment = reparto de escaños
-optimism = optimismo
 blind optimism = optimismo ciego
 blind pessimism = pesimismo ciego
 
 # Mathematics of infinity (chapter 8)
-countable = numerable
+countable = numerable | in the set-theory sense
 countably infinite = infinito numerable
-uncountable = no numerable
+uncountable = no numerable | in the set-theory sense
 uncountably many = una cantidad no numerable de
 one-to-one correspondence = correspondencia biunívoca
-natural numbers = números naturales
-real numbers = números reales
 finitism = finitismo
 potential infinity = infinito potencial
 realized infinity = infinito actual
 
-# Conjuring trick (chapter 1)
+# Conjuring tricks (chapter 1)
 cups and balls = cubiletes y bolas
 conjuring trick = truco de magia
 conjuring tricks = trucos de magia

@@ -48,6 +48,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cache-file", type=Path, default=None, help="Progress cache JSON path")
     parser.add_argument("--jsonl-file", type=Path, default=None, help="Prepared batch JSONL path")
     parser.add_argument("--manifest-file", type=Path, default=None, help="Prepared batch manifest path")
+    parser.add_argument(
+        "--glossary",
+        type=Path,
+        default=None,
+        help='Terminology file, one "source term = translation" per line (see glossaries/)',
+    )
     parser.add_argument("--prompt-file", type=Path, default=None, help="Custom prompt template path")
     parser.add_argument(
         "--repair-file",
@@ -97,7 +103,7 @@ def parse_args() -> argparse.Namespace:
 DEFAULT_MODELS = {
     "openai": "gpt-4.1-mini",
     "anthropic": "claude-sonnet-4-20250514",
-    "ollama": "gemma3:12b",
+    "ollama": "gemma4:26b-a4b-it-qat",
 }
 # Local models do better with smaller requests: shorter prompts, less JSON to
 # get right, and a failed group costs less to retry.
@@ -137,6 +143,7 @@ def build_config(args: argparse.Namespace) -> TranslationConfig:
         max_output_tokens=args.max_output_tokens,
         prepare_only=args.prepare_only,
         resume_batch_id=args.resume_batch_id,
+        glossary_file=args.glossary,
     )
 
 
@@ -147,6 +154,8 @@ def validate_config(config: TranslationConfig) -> None:
         raise ValueError("Input file must be an .epub")
     if config.prompt_file is not None and not config.prompt_file.exists():
         raise FileNotFoundError(f"Prompt template not found: {config.prompt_file}")
+    if config.glossary_file is not None and not config.glossary_file.exists():
+        raise FileNotFoundError(f"Glossary not found: {config.glossary_file}")
     if config.repair_file is not None and not config.repair_file.exists():
         raise FileNotFoundError(f"Repair file not found: {config.repair_file}")
 

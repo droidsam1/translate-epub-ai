@@ -65,3 +65,16 @@ def sanitized_model_name(model: str) -> str:
 
 def dump_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def normalize_spanish_quotes(text: str) -> str:
+    """Turn English-style quotes into Spanish « » (outer) quotes.
+
+    Small models often copy the source ‘ ’ / “ ” marks. Spanish text has no
+    apostrophes, so a ‘…’ pair is always a quotation.
+    """
+    text = re.sub(r"‘([^‘’]+)’", r"«\1»", text)
+    text = re.sub(r"“([^“”«»]+)”", r"«\1»", text)
+    if text.count('"') % 2 == 0:
+        text = re.sub(r'"([^"«»]+)"', r"«\1»", text)
+    return text

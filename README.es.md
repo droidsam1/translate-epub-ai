@@ -194,13 +194,13 @@ python -m translate_epub_ai "book.epub" --to es --review-passes 1
 2. Descarga un modelo, por ejemplo:
 
 ```bash
-ollama pull gemma3:12b
+ollama pull gemma4:26b-a4b-it-qat
 ```
 
 3. Traduce:
 
 ```bash
-python -m translate_epub_ai "libro.epub" --provider ollama --model gemma3:12b --to es
+python -m translate_epub_ai "libro.epub" --provider ollama --glossary glossaries/the-beginning-of-infinity.es.txt --to es
 ```
 
 Notas:
@@ -208,6 +208,9 @@ Notas:
 - Las peticiones se ejecutan una a una en tu equipo, así que un libro entero puede tardar horas. Se muestra el progreso y el tiempo estimado.
 - Si se interrumpe, vuelve a lanzar el mismo comando: los párrafos terminados están en la caché de progreso y no se traducen dos veces.
 - `--review-passes 0` se salta la segunda pasada de revisión y reduce el tiempo a la mitad.
+- `--glossary glossaries/the-beginning-of-infinity.es.txt` fuerza una terminología coherente. Solo se envían los términos que aparecen en cada petición. Para otros libros puedes escribir tu propio glosario (una línea `original = traducción`).
+- Modelo recomendado para una GPU de 16 GB: `gemma4:26b-a4b-it-qat` (mezcla de expertos, ~4B parámetros activos, así que es rápido). Con GPUs más pequeñas, `gemma4:12b`. El modo de razonamiento se desactiva automáticamente para ganar velocidad.
+- Para español, el prompt añade reglas de estilo concretas (comillas « », pasiva refleja, no omitir matices, evitar calcos) y las comillas se normalizan a « » automáticamente.
 - Variables de entorno opcionales: `OLLAMA_HOST` (por defecto `http://localhost:11434`), `OLLAMA_NUM_CTX` (por defecto `16384`), `OLLAMA_TEMPERATURE` (por defecto `0.3`).
 
 ## Cómo se envía el texto al modelo

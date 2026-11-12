@@ -11,7 +11,7 @@ from .batch_providers import build_grouped_requests
 from .cache import ProgressCache
 from .models import PendingNode, TranslationConfig
 from .segments import MARKER_RE, validate_markers
-from .utils import log, sanitized_model_name, stable_text_hash
+from .utils import log, normalize_spanish_quotes, sanitized_model_name, stable_text_hash
 
 FORMAT_RETRY_PASSES = 1
 SECTION_MARKERS = {
@@ -297,6 +297,7 @@ def build_round_config(
         max_output_tokens=base_config.max_output_tokens,
         prepare_only=False,
         resume_batch_id=None,
+        glossary_file=base_config.glossary_file,
     )
 
 
@@ -391,6 +392,8 @@ def execute_batch_round(
     suspicious_items: list[PendingNode] = []
     for item in pending:
         translated = parsed.translations_by_hash.get(stable_text_hash(item.core_text))
+        if translated is not None and config.target_lang.lower() == "es":
+            translated = normalize_spanish_quotes(translated)
         if translated is not None:
             issue = translation_issue(item, translated, config.target_lang)
             if issue is not None:

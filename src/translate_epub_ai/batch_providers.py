@@ -13,7 +13,7 @@ from typing import Dict, List, Optional
 import requests
 
 from .models import PendingNode, TranslationConfig
-from .prompting import build_translation_prompt
+from .prompting import build_translation_prompt, load_glossary
 from .utils import clean_json_text, dump_json, log, stable_text_hash
 
 OPENAI_FILES_URL = "https://api.openai.com/v1/files"
@@ -243,6 +243,7 @@ class OpenAIBatchProvider(BatchProvider):
                     context_hints=[item.get("context_hint", "") for item in items],
                     repair_mode=config.prompt_mode == "repair",
                     review_mode=config.prompt_mode == "review",
+                    glossary=load_glossary(config.glossary_file),
                 )
                 record = {
                     "custom_id": custom_id,
@@ -374,6 +375,7 @@ class AnthropicBatchProvider(BatchProvider):
                     context_hints=[item.get("context_hint", "") for item in items],
                     repair_mode=config.prompt_mode == "repair",
                     review_mode=config.prompt_mode == "review",
+                    glossary=load_glossary(config.glossary_file),
                 )
                 record = {
                     "custom_id": custom_id,
@@ -530,6 +532,7 @@ class OllamaProvider(BatchProvider):
                     context_hints=[item.get("context_hint", "") for item in items],
                     repair_mode=config.prompt_mode == "repair",
                     review_mode=config.prompt_mode == "review",
+                    glossary=load_glossary(config.glossary_file),
                 )
                 record = {
                     "custom_id": custom_id,

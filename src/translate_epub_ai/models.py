@@ -38,3 +38,4 @@ class TranslationConfig:
     max_output_tokens: int
     prepare_only: bool
     resume_batch_id: Optional[str]
+    glossary_file: Optional[Path] = None

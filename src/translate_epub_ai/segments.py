@@ -222,6 +222,56 @@ def validate_markers(source_encoded: str, translated: str) -> Optional[str]:
     return None
 
 
+def salvage_markers(source_encoded: str, translated: str) -> str:
+    """Last-resort fix for a translation whose markers are broken.
+
+    Removes the model's markers and re-inserts the source markers, in source
+    order, at the same relative position in the translated text, snapped to
+    word boundaries. The result always has valid, properly nested markers;
+    italics may cover slightly different words, which the review pass is
+    told to check.
+    """
+    source_plain = MARKER_RE.sub("", source_encoded)
+    clean = " ".join(MARKER_RE.sub(" ", translated).split())
+    if not source_plain or not clean:
+        return translated
+
+    insertions: List[Tuple[int, str]] = []
+    offset = 0
+    position_in_source = 0
+    for match in MARKER_RE.finditer(source_encoded):
+        position_in_source += match.start() - offset
+        offset = match.end()
+        ratio = position_in_source / len(source_plain)
+        target = round(ratio * len(clean))
+        closing = match.group(1) == "/"
+        insertions.append((snap_to_word_boundary(clean, target, closing), match.group(0)))
+
+    result: List[str] = []
+    cursor = 0
+    last = 0
+    for position, token in insertions:
+        position = max(position, last)
+        result.append(clean[cursor:position])
+        result.append(token)
+        cursor = last = position
+    result.append(clean[cursor:])
+    return "".join(result)
+
+
+def snap_to_word_boundary(text: str, position: int, closing: bool) -> int:
+    position = max(0, min(len(text), position))
+    if position in (0, len(text)):
+        return position
+    if closing:
+        while position < len(text) and text[position].isalnum():
+            position += 1
+    else:
+        while position > 0 and text[position - 1].isalnum():
+            position -= 1
+    return position
+
+
 def decode_into(segment: Segment, translated: str) -> bool:
     """Write a translated segment back into the tree. Returns False if the
     markers are invalid (the original content is then left untouched)."""

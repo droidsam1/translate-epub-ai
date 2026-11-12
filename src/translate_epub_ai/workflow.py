@@ -11,7 +11,7 @@ from .batch_providers import build_grouped_requests
 from .cache import ProgressCache
 from .models import PendingNode, TranslationConfig
 from .quality import ReviewItem, book_length_ratio, detect_weak_points
-from .segments import MARKER_RE, validate_markers
+from .segments import MARKER_RE, salvage_markers, validate_markers
 from .utils import log, normalize_spanish_quotes, sanitized_model_name, stable_text_hash
 
 FORMAT_RETRY_PASSES = 1
@@ -147,21 +147,31 @@ def looks_like_heading(text: str) -> bool:
 
 
 def contains_section_leakage(source_text: str, translated_text: str, target_lang: str) -> bool:
-    source = normalize_text(source_text).lower()
-    translated = normalize_text(translated_text).lower()
+    """Detect a neighbouring section title glued into the translation.
+
+    Only whole lines count: words like "contenido" or "notas" are ordinary
+    vocabulary inside a sentence and must not trigger this check.
+    """
     if count_words(source_text) < 8:
         return False
-
     markers = SECTION_MARKERS.get(target_lang.lower(), set())
+    source = normalize_text(source_text).lower()
+    plain_translation = normalize_text(MARKER_RE.sub("", translated_text))
     for marker in markers:
-        if marker in translated and marker not in source:
+        capitalised = re.escape(marker.capitalize())
+        glued_at_end = re.search(r"[.!?»…]\s+" + capitalised + r"\s*$", plain_translation)
+        glued_at_start = re.match(capitalised + r"\s*(?:\n|:|$)", plain_translation)
+        if (glued_at_end or glued_at_start) and marker not in source:
             return True
-
-    for segment in translated_text.splitlines():
-        stripped = normalize_text(segment)
-        if stripped and looks_like_heading(stripped) and stripped.lower() not in source and len(translated_text.splitlines()) > 1:
+    lines = [normalize_text(line) for line in translated_text.splitlines() if normalize_text(line)]
+    if len(lines) <= len(normalize_text(source_text).splitlines() or [""]):
+        return False
+    for line in lines:
+        bare = line.lower().strip(" .:")
+        if bare in markers:
             return True
-
+        if looks_like_heading(line) and line.lower() not in source:
+            return True
     return False
 
 
@@ -169,8 +179,20 @@ def has_broken_encoding_artifacts(text: str) -> bool:
     return any(token in text for token in ("\u00c2", "\u00c3", "\ufffd"))
 
 
-def has_suspicious_repetition(text: str) -> bool:
-    return re.search(r"([^\s])\1{4,}", text) is not None
+def has_suspicious_repetition(text: str, source: str = "") -> bool:
+    """A character repeated 5+ times that the source does not have (e.g. "aaaaa")."""
+    return any(
+        match.group(0) not in source for match in re.finditer(r"([^\s])\1{4,}", text)
+    )
+
+
+CITATION_RE = re.compile(r"\((?:[^()]*\b)?(?:1[5-9]\d\d|20\d\d)\)|\bISBN\b")
+
+
+def looks_like_citation(text: str) -> bool:
+    """Source lines such as 'Richard Dawkins, Climbing Mount Improbable (1996)'."""
+    plain = MARKER_RE.sub("", text)
+    return bool(CITATION_RE.search(plain)) and len(plain) < 300
 
 
 def looks_unbalanced(text: str) -> bool:
@@ -189,7 +211,7 @@ def should_auto_repair(source_text: str, translated_text: str, target_lang: str)
     translated = translated_text.strip()
     if not translated:
         return True
-    if has_broken_encoding_artifacts(translated) or has_suspicious_repetition(translated):
+    if has_broken_encoding_artifacts(translated) or has_suspicious_repetition(translated, source):
         return True
     if looks_unbalanced(translated) and count_words(source) >= 6:
         return True
@@ -233,17 +255,32 @@ def translation_issue(item: PendingNode, translated_text: str, target_lang: str)
     marker_issue = validate_markers(item.core_text, translated_text)
     if marker_issue is not None:
         return marker_issue
+    if context_kind in {"reference", "index"} or (
+        looks_like_citation(item.core_text) and translated_text.strip() == item.core_text.strip()
+    ):
+        # Bibliography and index entries are often legitimately identical to
+        # the source (names, titles, numbers): only structural checks apply.
+        return "empty translation" if not translated_text.strip() else None
     if should_auto_repair(item.core_text, translated_text, target_lang):
         return "failed quality heuristics"
     if contains_section_leakage(item.core_text, translated_text, target_lang):
         return "possible section leakage from a neighboring fragment"
     if context_kind == "heading" and translated_words >= max(10, source_words * 3):
         return "heading expanded into paragraph-like output"
-    if context_kind == "paragraph" and source_words >= 8 and looks_like_heading(translated_text):
+    if (
+        context_kind == "paragraph"
+        and source_words >= 8
+        and not plain_source_ends_with_colon(item.core_text)
+        and looks_like_heading(translated_text)
+    ):
         return "paragraph collapsed into heading-like output"
     if translated_text.count("\n\n") > item.core_text.count("\n\n") + 1:
         return "unexpected extra paragraph breaks"
     return None
+
+
+def plain_source_ends_with_colon(text: str) -> bool:
+    return MARKER_RE.sub("", text).rstrip().endswith(":")
 
 
 def build_review_candidates(
@@ -457,6 +494,13 @@ def execute_batch_round(
             translated = normalize_spanish_quotes(translated)
         if translated is not None:
             issue = translation_issue(item, translated, config.target_lang)
+            salvage_note = None
+            if issue is not None and issue.startswith("inline markers") and format_retry_attempts_left == 0:
+                salvaged = salvage_markers(item.core_text, translated)
+                if translation_issue(item, salvaged, config.target_lang) is None:
+                    translated, issue = salvaged, None
+                    salvage_note = "formatting markers were repositioned automatically; check italics/links"
+                    log(f"Repositioned inline markers automatically in {item.rel_path}#{item.node_index}")
             if issue is not None:
                 suspicious_items.append(
                     PendingNode(
@@ -472,7 +516,10 @@ def execute_batch_round(
                 )
                 continue
             cache.set(item.core_text, translated)
-            cache.set_note(item.core_text, parsed.doubts_by_hash.get(stable_text_hash(item.core_text)))
+            cache.set_note(
+                item.core_text,
+                salvage_note or parsed.doubts_by_hash.get(stable_text_hash(item.core_text)),
+            )
             stored += 1
 
     cache.save()

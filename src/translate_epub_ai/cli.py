@@ -403,9 +403,10 @@ def run(config: TranslationConfig) -> int:
 
             assert provider is not None
             if stored != len(pending):
-                log("Batch results were only partially usable. Cached successful translations so they will not be requested again.")
-                log(json.dumps(batch, ensure_ascii=False, indent=2))
-                return 2
+                log(
+                    f"{len(pending) - stored} paragraph(s) could not be translated after all retries; "
+                    "they keep the original text for now. Run again later to retry only those."
+                )
             if not provider.is_success_status(batch):
                 log("Batch did not complete fully successfully, but parsed results were cached.")
                 log(json.dumps(batch, ensure_ascii=False, indent=2))

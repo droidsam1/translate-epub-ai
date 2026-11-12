@@ -693,8 +693,8 @@ class OllamaProvider(BatchProvider):
         """Run the requests that have no usable result yet.
 
         A stored result is reused only if it belongs to the same source text
-        (content_hash). Results written before hashes existed are trusted, as
-        grouping is deterministic. Failed requests are retried.
+        (content_hash). Results without a hash (older versions) and failed
+        requests are discarded and requested again.
         """
         expected_hash = {record["custom_id"]: record.get("content_hash") for record in records}
         kept_lines: List[str] = []
@@ -707,9 +707,9 @@ class OllamaProvider(BatchProvider):
                 result = json.loads(line)
                 custom_id = result.get("custom_id")
                 stored_hash = result.get("content_hash")
-                if "error" in result or (
-                    stored_hash is not None and stored_hash != expected_hash.get(custom_id)
-                ):
+                # Without a matching content hash a stored result may belong to a
+                # different paragraph (group ids are reassigned on every run).
+                if "error" in result or stored_hash is None or stored_hash != expected_hash.get(custom_id):
                     dropped += 1
                     continue
                 kept_lines.append(line)

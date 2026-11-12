@@ -112,17 +112,17 @@ class OllamaProviderTests(unittest.TestCase):
             self.assertEqual(2, len(FakeOllama.requests_seen))
             self.assertEqual(1, len(output_path.read_text(encoding="utf-8").splitlines()))
 
-            # Legacy results without a hash, and failed results.
+            # Results without a hash (older versions) and failed results are redone.
             output_path.write_text(
                 json.dumps({"custom_id": "group_000001", "content": "[]"}) + "\n", encoding="utf-8"
             )
             provider.create_batch(request_path, None, "24h")
-            self.assertEqual(2, len(FakeOllama.requests_seen))
+            self.assertEqual(3, len(FakeOllama.requests_seen))
             output_path.write_text(
                 json.dumps({"custom_id": "group_000001", "error": "boom"}) + "\n", encoding="utf-8"
             )
             provider.create_batch(request_path, None, "24h")
-            self.assertEqual(3, len(FakeOllama.requests_seen))
+            self.assertEqual(4, len(FakeOllama.requests_seen))
 
 
 if __name__ == "__main__":

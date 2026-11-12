@@ -48,6 +48,23 @@ class WeakPointTests(unittest.TestCase):
         self.assertIn("sentences", joined)
         self.assertIn('"fallibilism" -> "falibilismo"', joined)
 
+    def test_translated_title_in_bibliography_is_flagged(self) -> None:
+        notes = detect_weak_points(
+            ReviewItem(
+                "Jacob Bronowski, <1>The Ascent of Man</1> (BBC, 1973)",
+                "Jacob Bronowski, <1>El ascenso del hombre</1> (BBC, 1973)",
+                kind="reference",
+            )
+        )
+        self.assertTrue(any('"The Ascent of Man"' in note for note in notes))
+        self.assertEqual(
+            [],
+            detect_weak_points(
+                ReviewItem("Jacob Bronowski, <1>The Ascent of Man</1> (BBC, 1973)",
+                           "Jacob Bronowski, <1>The Ascent of Man</1> (BBC, 1973)", kind="reference")
+            ),
+        )
+
     def test_glossary_sense_note_is_parsed_and_ignored_for_matching(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "g.txt"

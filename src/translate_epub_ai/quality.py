@@ -160,6 +160,20 @@ def check_back_reference(item: ReviewItem, source_lang: Optional[str]) -> Option
     return None
 
 
+def changed_wrapped_text(source: str, translation: str) -> List[str]:
+    """Text inside <N>…</N> that differs between source and translation."""
+    def wrapped(text: str) -> Dict[str, str]:
+        return {marker_id: inner.strip() for marker_id, inner in re.findall(r"<(\d+)>(.*?)</\1>", text)}
+
+    source_parts = wrapped(source)
+    target_parts = wrapped(translation)
+    return [
+        f'"{source_parts[marker_id]}"'
+        for marker_id in source_parts
+        if marker_id in target_parts and target_parts[marker_id] != source_parts[marker_id]
+    ]
+
+
 def detect_weak_points(
     item: ReviewItem,
     typical_ratio: Optional[float] = None,
@@ -173,6 +187,12 @@ def detect_weak_points(
         notes.append(marker_issue)
     if item.doubt:
         notes.append(f"the translator was unsure: {item.doubt}")
+    if item.kind == "reference":
+        changed = changed_wrapped_text(item.source, item.translation)
+        if changed:
+            notes.append(
+                "a cited title/name was translated; restore it exactly as in the source: " + ", ".join(changed[:3])
+            )
     if item.kind in {"reference", "index"}:
         return notes
 

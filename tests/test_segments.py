@@ -74,6 +74,23 @@ class SegmentTests(unittest.TestCase):
             self.assertIn("Loose text", output)
             self.assertIn("texto final", output)
 
+    def test_salvage_markers_always_returns_valid_markers(self) -> None:
+        from translate_epub_ai.segments import salvage_markers
+
+        cases = [
+            ("Spartan <1/>, <2/>–<3/>, <4/>–<5/>", "espartano <1>, <2>–<3>, <4>–<5/>"),
+            ("<1>By the way, this is never correct.</1>", "<1>Por cierto, esto nunca es correcto.<1>"),
+            (
+                "Next, philosophers moved away from <1/>trying to <2>understand</2> anything.",
+                "Después, los filósofos dejaron de <1>intentar <2>comprender <2>nada</2>.",
+            ),
+        ]
+        for source, broken in cases:
+            fixed = salvage_markers(source, broken)
+            self.assertIsNone(validate_markers(source, fixed), fixed)
+        self.assertTrue(salvage_markers(*cases[1]).startswith("<1>Por cierto"))
+        self.assertTrue(salvage_markers(*cases[1]).endswith("correcto.</1>"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,8 +1,9 @@
-"""Batch-provider abstraction with OpenAI and Anthropic implementations."""
+"""Batch-provider abstraction with OpenAI, Anthropic and local Ollama implementations."""
 
 from __future__ import annotations
 
 import json
+import os
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -21,6 +22,16 @@ OPENAI_RESPONSES_ENDPOINT = "/v1/responses"
 
 ANTHROPIC_BATCHES_URL = "https://api.anthropic.com/v1/messages/batches"
 ANTHROPIC_VERSION = "2023-06-01"
+
+OLLAMA_DEFAULT_HOST = "http://localhost:11434"
+OLLAMA_RESPONSE_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {"id": {"type": "string"}, "translation": {"type": "string"}},
+        "required": ["id", "translation"],
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -478,10 +489,210 @@ def extract_anthropic_output_text(message: dict) -> Optional[str]:
     return joined or None
 
 
+class OllamaProvider(BatchProvider):
+    """Local provider: runs every grouped request against an Ollama server.
+
+    Ollama has no batch API, so "creating a batch" processes the requests
+    one by one and streams results to a local JSONL file. That file doubles
+    as the batch id, so an interrupted run resumes where it stopped with
+    --resume-batch-id <path-to-output.jsonl>.
+    """
+
+    provider_name = "ollama"
+
+    def __init__(self, api_key: str = "", host: Optional[str] = None):
+        super().__init__(api_key)
+        self.host = (host or os.getenv("OLLAMA_HOST") or OLLAMA_DEFAULT_HOST).rstrip("/")
+        if not self.host.startswith("http"):
+            self.host = f"http://{self.host}"
+        self.num_ctx = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
+        self.temperature = float(os.getenv("OLLAMA_TEMPERATURE", "0.3"))
+        self._think_supported = True
+
+    def build_request_artifact(
+        self,
+        request_path: Path,
+        manifest_path: Path,
+        groups: List[List[PendingNode]],
+        config: TranslationConfig,
+    ) -> None:
+        manifest = build_manifest(groups)
+        with request_path.open("w", encoding="utf-8") as handle:
+            for custom_id, items in manifest.items():
+                prompt = build_translation_prompt(
+                    payload_texts=[item["core_text"] for item in items],
+                    payload_ids=[item["item_id"] for item in items],
+                    target_lang=config.target_lang,
+                    source_lang=config.source_lang,
+                    natural=config.natural,
+                    prompt_file=config.prompt_file,
+                    current_translations=[item.get("current_translation") for item in items],
+                    context_hints=[item.get("context_hint", "") for item in items],
+                    repair_mode=config.prompt_mode == "repair",
+                    review_mode=config.prompt_mode == "review",
+                )
+                record = {
+                    "custom_id": custom_id,
+                    "model": config.model,
+                    "max_tokens": config.max_output_tokens,
+                    "prompt": prompt,
+                }
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        dump_json(manifest_path, manifest)
+
+    def check_server(self, model: str) -> None:
+        try:
+            response = requests.get(f"{self.host}/api/tags", timeout=10)
+            response.raise_for_status()
+        except requests.RequestException as error:
+            raise RuntimeError(
+                f"Cannot reach Ollama at {self.host}. Is it installed and running? ({error})"
+            ) from error
+        names = {entry.get("name") for entry in response.json().get("models", [])}
+        wanted = model if ":" in model else f"{model}:latest"
+        if wanted not in names and model not in names:
+            raise RuntimeError(f"Model '{model}' is not installed in Ollama. Run: ollama pull {model}")
+
+    def _chat(self, record: dict) -> str:
+        body = {
+            "model": record["model"],
+            "messages": [{"role": "user", "content": record["prompt"]}],
+            "stream": False,
+            "format": OLLAMA_RESPONSE_SCHEMA,
+            "keep_alive": "30m",
+            "options": {
+                "num_ctx": self.num_ctx,
+                "num_predict": record.get("max_tokens", 4096),
+                "temperature": self.temperature,
+            },
+        }
+        if self._think_supported:
+            body["think"] = False
+        response = requests.post(f"{self.host}/api/chat", json=body, timeout=1800)
+        if response.status_code == 400 and "think" in response.text.lower() and self._think_supported:
+            self._think_supported = False
+            body.pop("think", None)
+            response = requests.post(f"{self.host}/api/chat", json=body, timeout=1800)
+        response.raise_for_status()
+        return ((response.json().get("message") or {}).get("content") or "").strip()
+
+    def create_batch(self, request_path: Path, metadata: Optional[dict], completion_window: str) -> str:
+        records = [
+            json.loads(line)
+            for line in request_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        output_path = request_path.with_suffix(".output.jsonl")
+        if records:
+            self.check_server(records[0]["model"])
+        self._run_records(records, output_path)
+        return str(output_path)
+
+    def _run_records(self, records: List[dict], output_path: Path) -> None:
+        done: set[str] = set()
+        if output_path.exists():
+            for line in output_path.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    done.add(json.loads(line).get("custom_id"))
+        todo = [record for record in records if record["custom_id"] not in done]
+        if done and todo:
+            log(f"Ollama: resuming, {len(done)} request(s) already done, {len(todo)} left.")
+
+        started = time.monotonic()
+        with output_path.open("a", encoding="utf-8") as handle:
+            for index, record in enumerate(todo, start=1):
+                try:
+                    content = self._chat(record)
+                    result = {"custom_id": record["custom_id"], "content": content}
+                except requests.RequestException as error:
+                    result = {"custom_id": record["custom_id"], "error": str(error)}
+                handle.write(json.dumps(result, ensure_ascii=False) + "\n")
+                handle.flush()
+                elapsed = time.monotonic() - started
+                remaining = elapsed / index * (len(todo) - index)
+                log(
+                    f"Ollama: {index}/{len(todo)} requests done "
+                    f"({elapsed / 60:.1f} min elapsed, ~{remaining / 60:.0f} min left)"
+                )
+
+    def get_batch(self, batch_id: str) -> dict:
+        output_path = Path(batch_id)
+        lines = output_path.read_text(encoding="utf-8").splitlines() if output_path.exists() else []
+        failed = sum(1 for line in lines if line.strip() and "error" in json.loads(line))
+        return {
+            "id": batch_id,
+            "status": "completed" if output_path.exists() else "missing",
+            "request_counts": {"total": len(lines), "failed": failed},
+        }
+
+    def wait_for_batch(self, batch_id: str, poll_seconds: int) -> dict:
+        output_path = Path(batch_id)
+        request_path = output_path.with_name(output_path.name.replace(".output.jsonl", ".jsonl"))
+        if request_path.exists() and request_path != output_path:
+            # Resuming: finish any requests that were not processed yet.
+            records = [
+                json.loads(line)
+                for line in request_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            self._run_records(records, output_path)
+        batch = self.get_batch(batch_id)
+        log(self.describe_status(batch))
+        return batch
+
+    def get_status(self, batch: dict) -> str:
+        return str(batch.get("status"))
+
+    def describe_status(self, batch: dict) -> str:
+        counts = batch.get("request_counts", {})
+        return f"Ollama run: {self.get_status(batch)} | total={counts.get('total', 0)} failed={counts.get('failed', 0)}"
+
+    def wait_terminal_statuses(self) -> set[str]:
+        return {"completed", "missing"}
+
+    def is_success_status(self, batch: dict) -> bool:
+        return self.get_status(batch) == "completed"
+
+    def get_result_bytes(self, batch: dict, batch_id: str) -> Optional[bytes]:
+        output_path = Path(batch_id)
+        return output_path.read_bytes() if output_path.exists() else None
+
+    def parse_grouped_output(self, output_bytes: bytes, manifest_path: Path) -> ParsedBatchOutput:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        translations_by_hash: Dict[str, str] = {}
+        malformed_groups: Dict[str, str] = {}
+        seen_groups: set[str] = set()
+
+        for line in output_bytes.decode("utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            custom_id = record.get("custom_id")
+            if not custom_id or custom_id not in manifest:
+                continue
+            seen_groups.add(custom_id)
+            if record.get("error"):
+                malformed_groups[custom_id] = f"request failed: {record['error']}"
+                continue
+            parsed_group, issue = parse_translated_array(record.get("content"), manifest[custom_id])
+            if issue is not None:
+                malformed_groups[custom_id] = issue
+                continue
+            translations_by_hash.update(parsed_group)
+
+        for custom_id in manifest:
+            if custom_id not in seen_groups:
+                malformed_groups.setdefault(custom_id, "missing output record")
+
+        return ParsedBatchOutput(translations_by_hash=translations_by_hash, malformed_groups=malformed_groups)
+
+
 def create_provider(provider_name: str, api_key: str) -> BatchProvider:
     normalized = provider_name.lower()
     if normalized == "openai":
         return OpenAIBatchProvider(api_key)
     if normalized == "anthropic":
         return AnthropicBatchProvider(api_key)
+    if normalized == "ollama":
+        return OllamaProvider(api_key)
     raise ValueError(f"Unsupported provider: {provider_name}")

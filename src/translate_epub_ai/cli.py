@@ -31,10 +31,19 @@ def parse_args() -> argparse.Namespace:
         description="Translate an EPUB using a batch API while preserving ebook structure."
     )
     parser.add_argument("input", type=Path, help="Input EPUB file")
-    parser.add_argument("--provider", choices=["openai", "anthropic"], default="openai")
+    parser.add_argument(
+        "--provider",
+        choices=["openai", "anthropic", "ollama"],
+        default="openai",
+        help="openai/anthropic use their batch APIs; ollama runs a local model (no API key, no cost)",
+    )
     parser.add_argument("--to", default="es", help="Target language, for example: es")
     parser.add_argument("--from-lang", default=None, help="Optional source language, for example: en")
-    parser.add_argument("--model", default="gpt-4.1-mini", help="Model to use for batch translation")
+    parser.add_argument(
+        "--model",
+        default=None,
+        help=f"Model to use. Defaults: {', '.join(f'{k}={v}' for k, v in DEFAULT_MODELS.items())}",
+    )
     parser.add_argument("--output", type=Path, default=None, help="Output EPUB path")
     parser.add_argument("--cache-file", type=Path, default=None, help="Progress cache JSON path")
     parser.add_argument("--jsonl-file", type=Path, default=None, help="Prepared batch JSONL path")
@@ -62,8 +71,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--natural", action="store_true", help="Prefer a more literary translation style (default)")
     parser.add_argument("--completion-window", default="24h", choices=["24h"])
     parser.add_argument("--poll-seconds", type=int, default=60, help="Seconds between batch status checks")
-    parser.add_argument("--max-items-per-request", type=int, default=12)
-    parser.add_argument("--max-chars-per-request", type=int, default=5500)
+    parser.add_argument(
+        "--max-items-per-request",
+        type=int,
+        default=None,
+        help="Paragraphs per request (default 12; 6 for ollama)",
+    )
+    parser.add_argument(
+        "--max-chars-per-request",
+        type=int,
+        default=None,
+        help="Source characters per request (default 5500; 3000 for ollama)",
+    )
     parser.add_argument(
         "--max-output-tokens",
         type=int,
@@ -75,8 +94,26 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+DEFAULT_MODELS = {
+    "openai": "gpt-4.1-mini",
+    "anthropic": "claude-sonnet-4-20250514",
+    "ollama": "gemma3:12b",
+}
+# Local models do better with smaller requests: shorter prompts, less JSON to
+# get right, and a failed group costs less to retry.
+LOCAL_REQUEST_LIMITS = (6, 3000)
+REMOTE_REQUEST_LIMITS = (12, 5500)
+
+
 def build_config(args: argparse.Namespace) -> TranslationConfig:
     natural = not args.literal or args.natural
+    if args.model is None:
+        args.model = DEFAULT_MODELS[args.provider]
+    default_items, default_chars = LOCAL_REQUEST_LIMITS if args.provider == "ollama" else REMOTE_REQUEST_LIMITS
+    if args.max_items_per_request is None:
+        args.max_items_per_request = default_items
+    if args.max_chars_per_request is None:
+        args.max_chars_per_request = default_chars
     return TranslationConfig(
         input_epub=args.input,
         provider=args.provider,
@@ -246,7 +283,7 @@ def run(config: TranslationConfig) -> int:
     validate_config(config)
 
     api_key_env = required_api_key_env(config.provider)
-    api_key = os.getenv(api_key_env)
+    api_key = os.getenv(api_key_env) if api_key_env else "local"
     if not api_key and not config.prepare_only:
         raise RuntimeError(f"{api_key_env} is not set.")
 
@@ -333,7 +370,7 @@ def run(config: TranslationConfig) -> int:
 def main() -> int:
     try:
         return run(build_config(parse_args()))
-    except (FileNotFoundError, ValueError) as error:
+    except (FileNotFoundError, ValueError, RuntimeError) as error:
         log(str(error))
         return 1
 

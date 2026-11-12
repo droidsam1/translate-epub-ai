@@ -188,6 +188,39 @@ También puedes controlar la revisión editorial incorporada:
 python -m translate_epub_ai "book.epub" --to es --review-passes 1
 ```
 
+## Traducir en local con Ollama (gratis, sin API key)
+
+1. Instala Ollama: <https://ollama.com/download> (Windows: `winget install Ollama.Ollama`).
+2. Descarga un modelo, por ejemplo:
+
+```bash
+ollama pull gemma3:12b
+```
+
+3. Traduce:
+
+```bash
+python -m translate_epub_ai "libro.epub" --provider ollama --model gemma3:12b --to es
+```
+
+Notas:
+
+- Las peticiones se ejecutan una a una en tu equipo, así que un libro entero puede tardar horas. Se muestra el progreso y el tiempo estimado.
+- Si se interrumpe, vuelve a lanzar el mismo comando: los párrafos terminados están en la caché de progreso y no se traducen dos veces.
+- `--review-passes 0` se salta la segunda pasada de revisión y reduce el tiempo a la mitad.
+- Variables de entorno opcionales: `OLLAMA_HOST` (por defecto `http://localhost:11434`), `OLLAMA_NUM_CTX` (por defecto `16384`), `OLLAMA_TEMPERATURE` (por defecto `0.3`).
+
+## Cómo se envía el texto al modelo
+
+Cada párrafo o título se traduce como una unidad. El formato interno se sustituye por marcadores numerados para que el modelo vea la frase entera:
+
+```text
+<p>The <em>principle</em> was key.<sup><a href="#n1">12</a></sup></p>
+-> "The <1>principle</1> was key.<2/>"
+```
+
+El modelo puede mover los marcadores para seguir el orden natural del español; después se vuelven a convertir en las etiquetas originales. Las traducciones cuyos marcadores no cuadran con el original se rechazan y se reintentan.
+
 ## Ejecutar tests
 
 ```bash
@@ -199,6 +232,7 @@ python -m unittest discover -s tests -v
 ```text
 src/translate_epub_ai/cli.py
 src/translate_epub_ai/epub.py
+src/translate_epub_ai/segments.py
 src/translate_epub_ai/batch_providers.py
 src/translate_epub_ai/prompting.py
 tests/
@@ -208,7 +242,8 @@ tests/
 
 - `cli.py`: punto de entrada por línea de comandos
 - `epub.py`: extrae y reconstruye archivos EPUB
-- `batch_providers.py`: lógica específica de OpenAI y Anthropic para batches
+- `batch_providers.py`: lógica de OpenAI y Anthropic (APIs batch) y de Ollama (local)
+- `segments.py`: divide los capítulos en párrafos y convierte el formato interno en marcadores y de vuelta
 - `prompting.py`: genera el prompt de traducción
 - `tests/`: ayuda a que los cambios sean más seguros
 

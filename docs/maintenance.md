@@ -3,7 +3,7 @@
 ## Development workflow
 
 1. Keep prompt edits in template files whenever possible.
-2. Keep EPUB parsing changes in `src/translate_epub_ai/epub.py`.
+2. Keep EPUB file handling in `src/translate_epub_ai/epub.py` and paragraph segmentation / inline-marker logic in `src/translate_epub_ai/segments.py`.
 3. Keep OpenAI API and batch lifecycle changes in `src/translate_epub_ai/openai_batch.py`.
 4. Add tests before changing parsing or output-mapping behavior.
 

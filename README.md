@@ -188,6 +188,39 @@ You can also control the built-in review stage:
 python -m translate_epub_ai "book.epub" --to es --review-passes 1
 ```
 
+## Translate locally with Ollama (free, no API key)
+
+1. Install Ollama: <https://ollama.com/download> (Windows: `winget install Ollama.Ollama`).
+2. Download a model, for example:
+
+```bash
+ollama pull gemma3:12b
+```
+
+3. Translate:
+
+```bash
+python -m translate_epub_ai "book.epub" --provider ollama --model gemma3:12b --to es
+```
+
+Notes:
+
+- Requests run one by one on your machine, so a full book can take hours. Progress and an ETA are printed as it goes.
+- If the run stops, launch the same command again: finished paragraphs are in the progress cache and are not translated twice.
+- `--review-passes 0` skips the second editorial pass and halves the time.
+- Optional environment variables: `OLLAMA_HOST` (default `http://localhost:11434`), `OLLAMA_NUM_CTX` (default `16384`), `OLLAMA_TEMPERATURE` (default `0.3`).
+
+## How text is sent to the model
+
+Each paragraph or heading is translated as one unit. Inline formatting is replaced by numbered markers so the model sees the whole sentence:
+
+```text
+<p>The <em>principle</em> was key.<sup><a href="#n1">12</a></sup></p>
+-> "The <1>principle</1> was key.<2/>"
+```
+
+The model may move markers to follow Spanish word order; they are mapped back onto the original tags afterwards. Translations whose markers do not match the source are rejected and retried.
+
 ## Run tests
 
 ```bash
@@ -199,6 +232,7 @@ python -m unittest discover -s tests -v
 ```text
 src/translate_epub_ai/cli.py
 src/translate_epub_ai/epub.py
+src/translate_epub_ai/segments.py
 src/translate_epub_ai/batch_providers.py
 src/translate_epub_ai/prompting.py
 tests/
@@ -208,7 +242,8 @@ tests/
 
 - `cli.py`: command-line entry point
 - `epub.py`: extract and rebuild EPUB files
-- `batch_providers.py`: provider-specific batch logic for OpenAI and Anthropic
+- `batch_providers.py`: provider logic for OpenAI and Anthropic (batch APIs) and Ollama (local)
+- `segments.py`: split chapters into paragraphs and map inline markup to markers and back
 - `prompting.py`: generate the translation prompt
 - `tests/`: keep refactors safer
 

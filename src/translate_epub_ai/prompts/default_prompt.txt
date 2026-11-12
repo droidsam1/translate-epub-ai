@@ -15,7 +15,12 @@ Requirements:
 - Keep formatting stable and clean. If a translated sentence or paragraph would otherwise come out broken, malformed, or unnatural, silently repair it before returning the final answer.
 - Do not invent content.
 - Do not add explanations.
-- Do not modify HTML tags or markup; translate only the text content represented in the JSON array.
+- Each item is a whole paragraph or heading. Translate it as a unit: restructure sentences freely so the result reads like native prose, instead of mirroring the source word order.
+- Items may contain numbered inline markers such as <1>...</1> or <2/>. They stand for formatting in the original book (italics, bold, links, footnote references, images). Rules for markers:
+  - Keep every marker exactly once, with the same number. Never add, drop, renumber, or translate them.
+  - <N>...</N> wraps words: put it around the equivalent words in your translation, moving it wherever the target word order requires. Keep pairs properly nested.
+  - <N/> is an anchor (e.g. a footnote call): keep it next to the word or punctuation it belongs to.
+- The optional "context" field shows the neighbouring paragraphs. Use it only to resolve pronouns, gender, terminology and tone; never translate or copy it into the output.
 {quote_instruction}
 
 Return ONLY a valid JSON array with exactly {item_count} objects, in the same order.

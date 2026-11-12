@@ -10,6 +10,7 @@ from typing import Any
 from .batch_providers import build_grouped_requests
 from .cache import ProgressCache
 from .models import PendingNode, TranslationConfig
+from .segments import MARKER_RE, validate_markers
 from .utils import log, sanitized_model_name, stable_text_hash
 
 FORMAT_RETRY_PASSES = 1
@@ -64,7 +65,9 @@ def make_manifest_name(input_path: Path, provider: str, target_lang: str, model:
     return input_path.with_name(f"{input_path.stem}_{provider}_{suffix}.manifest.json")
 
 
-def required_api_key_env(provider: str) -> str:
+def required_api_key_env(provider: str) -> str | None:
+    if provider == "ollama":
+        return None
     return "ANTHROPIC_API_KEY" if provider == "anthropic" else "OPENAI_API_KEY"
 
 
@@ -116,7 +119,7 @@ def cleanup_artifacts(paths: list[Path]) -> None:
 
 
 def count_words(text: str) -> int:
-    return len(re.findall(r"[A-Za-zÀ-ÿ0-9]+", text))
+    return len(re.findall(r"[A-Za-zÀ-ÿ0-9]+", MARKER_RE.sub(" ", text)))
 
 
 def normalize_text(text: str) -> str:
@@ -226,6 +229,9 @@ def translation_issue(item: PendingNode, translated_text: str, target_lang: str)
     translated_words = count_words(translated_text)
     context_kind = extract_context_kind(item.context_hint)
 
+    marker_issue = validate_markers(item.core_text, translated_text)
+    if marker_issue is not None:
+        return marker_issue
     if should_auto_repair(item.core_text, translated_text, target_lang):
         return "failed quality heuristics"
     if contains_section_leakage(item.core_text, translated_text, target_lang):

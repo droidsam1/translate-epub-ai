@@ -5,11 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "translate-epub-ai"
 version = "0.1.0"
-description = "Translate EPUB files with the OpenAI Batch API while preserving ebook structure."
+description = "Translate EPUB files with OpenAI, Anthropic or a local Ollama model while preserving ebook structure."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "beautifulsoup4>=4.12",
   "lxml>=5.0",
   "requests>=2.31",
 ]

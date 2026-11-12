@@ -20,6 +20,8 @@ Spanish style rules (follow them strictly):
 - Use the established Spanish spelling of terms (falibilismo, justificacionismo, empirismo, inductivismo, multiverso), not anglicised forms.
 - Emphasis: when a marker wraps an emphasised English word, wrap the Spanish word that carries the same emphasis, even if it is a different part of speech. Do not put emphasis on a word that is not stressed in Spanish.
 - Keep the source punctuation that structures the text: a paragraph ending in a colon must still end in a colon.
+- Use Peninsular Spanish, not Latin American usage: "lo buenas que sean" (not "qué tan buenas sean"), "ordenador" (not "computadora"), "vosotros" forms in dialogue between friends, "coger"/"aparcar"/"móvil" where relevant.
+- Choose "ser" or "estar" carefully: states and results take "estar" ("está sujeta a error", not "es sujeta a error").
 - Write the result as a native editor from Spain would: varied sentence openings, no "Por lo tanto" in every sentence, natural use of "lo que", "de modo que", "es decir".
 """
 
